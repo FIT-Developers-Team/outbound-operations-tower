@@ -21,9 +21,9 @@ export async function generateMetadata(): Promise<Metadata> {
     requestHeaders.get("x-forwarded-proto") ??
     (host.startsWith("localhost") ? "http" : "https");
   const metadataBase = new URL(`${protocol}://${host}`);
-  const title = "CBT Outbound Assignment Hub";
+  const title = "CBT Outbound Operations Hub";
   const description =
-    "Perencanaan SO per Picking Zone, assignment picker per shift, konfigurasi Wave dan Drop, serta Bulk Upload WMS.";
+    "Pantau SO, kapasitas picker, Wave dan Drop dinamis, assignment manual, serta Bulk Upload WMS dalam satu ruang kerja.";
   return {
     metadataBase,
     title: { default: title, template: "%s / CBT Outbound Assignment Hub" },
@@ -32,13 +32,13 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      images: [{ url: "/og-spatial.png", width: 1200, height: 630, alt: title }],
+      images: [{ url: "/og.png", width: 1200, height: 630, alt: title }],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: ["/og-spatial.png"],
+      images: ["/og.png"],
     },
   };
 }

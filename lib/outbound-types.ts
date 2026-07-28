@@ -1,27 +1,13 @@
-export type Wave =
-  | "WAVE 1"
-  | "WAVE 1+"
-  | "WAVE 2"
-  | "WAVE 3"
-  | "WAVE 4"
-  | "WAVE 4+"
-  | "UNMAPPED";
-
-export type Drop = "DROP 1" | "DROP 2" | "DROP 3" | "DROP 4" | "DROP 5" | "UNMAPPED";
+/**
+ * Wave and Drop are configuration values, not enums. Operations can introduce
+ * a new label without requiring a code change or a deployment.
+ */
+export type Wave = string;
+export type Drop = string;
 export type MpStatus = "OJT 1" | "OJT 2" | "OJT 3" | "REGULER";
 export type ShiftCode = "PAGI" | "MID" | "SIANG" | "MALAM";
 
-export type OrderStatus =
-  | "NEW"
-  | "ASSIGNED"
-  | "PICKING"
-  | "PACKING"
-  | "STAGING"
-  | "LOADING"
-  | "READY TO SHIP"
-  | "ON DELIVERY"
-  | "COMPLETED"
-  | "HOLD";
+export type OrderStatus = string;
 
 export type AlertState = "NORMAL" | "MONITOR" | "WARNING" | "CRITICAL";
 export type PickerState = "ACTIVE" | "BREAK" | "OFFLINE";
@@ -34,12 +20,17 @@ export type SupplyOrderLine = {
   originId: string;
   originLocationName: string;
   productId: string;
+  productName: string;
   skuNumber: string;
   destination: string;
   status: OrderStatus;
   priority: "High" | "Medium" | "Low";
   originRackName: string;
   pickingAreaName: string;
+  pickingStaffId: string | null;
+  pickerName: string | null;
+  pickingStartAt: string | null;
+  pickingEndAt: string | null;
   requestQty: number;
 };
 
@@ -170,6 +161,31 @@ export type AssignmentProposal = {
   reason: string;
   projectedLoadPct: number;
   blockingReason: string | null;
+  mode: "RECOMMENDATION" | "MANUAL";
+  operatorNote: string | null;
+};
+
+export type ManualAssignmentInput = {
+  orderIds: string[];
+  pickerId: string;
+  lockWholeSo: boolean;
+  requireActive: boolean;
+  requireCheckIn: boolean;
+  requireRole: boolean;
+  requireShift: boolean;
+  requireZone: boolean;
+  enforceCapacity: boolean;
+  allowOverride: boolean;
+  note: string;
+};
+
+export type ManualAssignmentCheck = {
+  orderIds: string[];
+  pickerId: string;
+  totalQty: number;
+  projectedLoadPct: number;
+  violations: string[];
+  canStage: boolean;
 };
 
 export type BulkUploadRow = {
@@ -199,7 +215,36 @@ export type SourceProfile = {
   pickerRows: number;
   eligiblePickers: number;
   checkedInRows: number;
+  dateRange?: { from: string; to: string };
+  completedLineQty?: number;
   qualityNotes: string[];
+};
+
+export type SyncHealth =
+  | "NOT_CONFIGURED"
+  | "READY"
+  | "SYNCING"
+  | "CONNECTED"
+  | "EXPIRING"
+  | "EXPIRED"
+  | "ERROR";
+
+export type ConnectorPublicConfig = {
+  baseUrl: string;
+  soSliceId: string;
+  staffSliceId: string;
+  pathTemplate: string;
+  currentMonthOnly: true;
+  cookiePresent: boolean;
+  cookieSource: "stored" | "environment" | "none";
+  cookieExpiresAt: string | null;
+  cookieUpdatedAt: string | null;
+  encryptionReady: boolean;
+  health: SyncHealth;
+  lastMessage: string | null;
+  lastVerifiedAt: string | null;
+  lastRunAt: string | null;
+  lastRunStatus: string | null;
 };
 
 export type DemoDataset = {

@@ -1,4 +1,51 @@
-// Intentionally empty by default.
-// Add Drizzle tables here when the site actually needs a database.
-// See examples/d1/db/schema.ts for an opt-in example.
-export {};
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const syncConnector = sqliteTable("sync_connector", {
+  id: text("id").primaryKey().default("primary"),
+  baseUrl: text("base_url").notNull().default(""),
+  soSliceId: text("so_slice_id").notNull().default(""),
+  staffSliceId: text("staff_slice_id").notNull().default(""),
+  pathTemplate: text("path_template")
+    .notNull()
+    .default("/api/v1/chart/{sliceId}/data/?format=csv&force=true"),
+  cookieCiphertext: text("cookie_ciphertext"),
+  cookieIv: text("cookie_iv"),
+  cookieExpiresAt: text("cookie_expires_at"),
+  cookieUpdatedAt: text("cookie_updated_at"),
+  health: text("health").notNull().default("NOT_CONFIGURED"),
+  lastMessage: text("last_message"),
+  lastVerifiedAt: text("last_verified_at"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const syncRuns = sqliteTable(
+  "sync_runs",
+  {
+    id: text("id").primaryKey(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    status: text("status").notNull(),
+    triggeredBy: text("triggered_by").notNull(),
+    month: text("month").notNull(),
+    soRows: integer("so_rows").notNull().default(0),
+    staffRows: integer("staff_rows").notNull().default(0),
+    datasetKey: text("dataset_key"),
+    message: text("message"),
+  },
+  (table) => [
+    index("sync_runs_started_at_idx").on(table.startedAt),
+    index("sync_runs_status_idx").on(table.status),
+  ],
+);
+
+export const datasetSnapshots = sqliteTable("dataset_snapshots", {
+  id: text("id").primaryKey().default("current"),
+  sourceDate: text("source_date").notNull(),
+  month: text("month").notNull(),
+  datasetKey: text("dataset_key").notNull(),
+  fallbackPayload: text("fallback_payload"),
+  soRows: integer("so_rows").notNull().default(0),
+  staffRows: integer("staff_rows").notNull().default(0),
+  syncedAt: text("synced_at").notNull(),
+  runId: text("run_id").notNull(),
+});

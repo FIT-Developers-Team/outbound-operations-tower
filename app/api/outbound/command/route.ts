@@ -1,145 +1,269 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { resolveDestinationRule } from "@/lib/outbound-logic";
+import {
+  loadDatasetSnapshot,
+  saveDatasetSnapshot,
+} from "@/lib/runtime-storage";
+import type {
+  CheckerState,
+  DemoDataset,
+  DestinationRule,
+  Picker,
+  TargetRule,
+} from "@/lib/outbound-types";
 
 const actions = new Set([
   "assignBatch",
+  "updateDestinationRule",
+  "updateStaffRoster",
+  "updateTargetRule",
   "checkerDone",
   "checkerReset",
-  "updateStaffRoster",
-  "updateDestinationRule",
-  "updateTargetRule",
-  "generateAssignmentPlan",
-  "exportBulkUpload",
 ]);
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
 }
 
-function isGasEndpoint(value: string) {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "https:" &&
-      url.hostname === "script.google.com" &&
-      /^\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url.pathname)
-    );
-  } catch {
-    return false;
-  }
-}
-
-export async function POST(request: NextRequest) {
+async function requireAdmin() {
   const user = await getChatGPTUser();
-  if (!user) return error(401, "AUTH_REQUIRED", "Sign in is required for outbound commands.");
-
-  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
-  if (!contentType.startsWith("application/json")) {
-    return error(415, "JSON_REQUIRED", "Outbound commands require application/json.");
-  }
-  const origin = request.headers.get("origin");
-  if (origin && origin !== request.nextUrl.origin) {
-    return error(403, "CROSS_ORIGIN_BLOCKED", "Cross-origin commands are not allowed.");
-  }
-  const allowedEmails = (process.env.OUTBOUND_COMMAND_ALLOWED_EMAILS ?? "")
+  if (!user) return { user: null, authenticated: false };
+  const allowed = (process.env.OUTBOUND_ADMIN_EMAILS ?? "")
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
-  if (!allowedEmails.length) {
+  return {
+    user: allowed.includes(user.email.toLowerCase()) ? user : null,
+    authenticated: true,
+  };
+}
+
+function addAudit(
+  data: DemoDataset,
+  actor: string,
+  action: string,
+  detail: string,
+) {
+  data.audit = [
+    {
+      id: `CMD-${Date.now()}`,
+      at: new Date().toLocaleTimeString("en-GB", {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "Asia/Jakarta",
+      }),
+      actor,
+      action,
+      detail,
+      tone: "success" as const,
+    },
+    ...data.audit,
+  ].slice(0, 40);
+}
+
+export async function POST(request: NextRequest) {
+  const admin = await requireAdmin();
+  if (!admin.authenticated) {
+    return error(401, "AUTH_REQUIRED", "Masuk diperlukan.");
+  }
+  const user = admin.user;
+  if (!user) {
     return error(
-      503,
-      "COMMAND_AUTHORIZATION_NOT_CONFIGURED",
-      "The command writer allowlist is not configured.",
+      403,
+      "ADMIN_REQUIRED",
+      "Akun ini belum ada di OUTBOUND_ADMIN_EMAILS.",
     );
   }
-  if (!allowedEmails.includes(user.email.toLowerCase())) {
-    return error(403, "COMMAND_FORBIDDEN", "This account does not have command access.");
+  if (!request.headers.get("content-type")?.startsWith("application/json")) {
+    return error(415, "JSON_REQUIRED", "Gunakan application/json.");
   }
-
+  const origin = request.headers.get("origin");
+  if (origin && origin !== request.nextUrl.origin) {
+    return error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
+  }
   const idempotencyKey = request.headers.get("idempotency-key")?.trim() ?? "";
   if (!/^[A-Za-z0-9:._-]{12,100}$/.test(idempotencyKey)) {
     return error(
       400,
       "IDEMPOTENCY_KEY_REQUIRED",
-      "A valid Idempotency-Key header is required.",
+      "Idempotency-Key yang valid diperlukan.",
     );
   }
-
   const raw = await request.text();
-  if (raw.length > 250_000) return error(413, "COMMAND_TOO_LARGE", "The command payload exceeded the safe limit.");
-
-  let parsed: unknown;
+  if (raw.length > 250_000) {
+    return error(413, "COMMAND_TOO_LARGE", "Payload command terlalu besar.");
+  }
+  let body: Record<string, unknown>;
   try {
-    parsed = JSON.parse(raw);
+    body = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return error(400, "INVALID_JSON", "The command body must be valid JSON.");
+    return error(400, "INVALID_JSON", "JSON tidak valid.");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return error(400, "INVALID_COMMAND", "The command body must be a JSON object.");
+  const action = String(body.action ?? "");
+  if (!actions.has(action)) {
+    return error(400, "INVALID_ACTION", "Command tidak dikenal.");
   }
-  const payload = parsed as Record<string, unknown>;
-
-  const action = typeof payload.action === "string" ? payload.action : "";
-  if (!actions.has(action)) return error(400, "INVALID_ACTION", "Unknown outbound command.");
-  if (Array.isArray(payload.rows) && payload.rows.length > 500) {
-    return error(400, "TOO_MANY_ROWS", "A command can contain at most 500 rows.");
+  const snapshot = await loadDatasetSnapshot();
+  if (!snapshot) {
+    return error(
+      409,
+      "SNAPSHOT_NOT_READY",
+      "Jalankan sync pertama sebelum menyimpan perubahan.",
+    );
   }
-
-  const endpoint = (
-    process.env.OUTBOUND_COMMAND_GAS_ENDPOINT ||
-    process.env.OUTBOUND_GAS_ENDPOINT ||
-    ""
-  ).trim();
-  const token = process.env.OUTBOUND_COMMAND_GAS_TOKEN?.trim() ?? "";
-  if (!isGasEndpoint(endpoint) || token.length < 20) {
-    return error(503, "COMMAND_SOURCE_NOT_CONFIGURED", "The outbound command source is not configured.");
-  }
+  const data = structuredClone(snapshot.data);
 
   try {
-    const upstream = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...payload,
-        action,
-        token,
-        actor: user.email,
-        actorName: user.displayName,
-        idempotencyKey,
-      }),
-      cache: "no-store",
-      redirect: "follow",
-      signal: AbortSignal.timeout(25_000),
-    });
-    if (!upstream.ok) return error(502, "COMMAND_UPSTREAM_ERROR", "The command service is temporarily unavailable.");
-
-    const responseText = await upstream.text();
-    if (responseText.length > 500_000) return error(502, "COMMAND_RESPONSE_TOO_LARGE", "The command response exceeded the safe limit.");
-
-    let responsePayload: unknown;
-    try {
-      responsePayload = JSON.parse(responseText);
-    } catch {
-      return error(502, "COMMAND_INVALID_RESPONSE", "The command service returned invalid JSON.");
+    if (action === "assignBatch") {
+      const rows = Array.isArray(body.rows)
+        ? (body.rows as Array<Record<string, unknown>>)
+        : [];
+      if (!rows.length || rows.length > 500) {
+        throw new Error("Batch assignment harus berisi 1–500 split.");
+      }
+      const byOrder = new Map(
+        rows.map((row) => [
+          String(row.orderId ?? ""),
+          String(row.pickerId ?? ""),
+        ]),
+      );
+      data.orders = data.orders.map((order) => {
+        const pickerId = byOrder.get(order.id);
+        return pickerId
+          ? {
+              ...order,
+              pickerId,
+              status: "ASSIGNED",
+              updatedAt: new Date().toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+                timeZone: "Asia/Jakarta",
+              }),
+            }
+          : order;
+      });
+      addAudit(
+        data,
+        user.email,
+        "Assignment batch disimpan",
+        `${rows.length} SO-zone split diperbarui.`,
+      );
     }
-    if (
-      !responsePayload ||
-      typeof responsePayload !== "object" ||
-      (responsePayload as { ok?: boolean }).ok !== true
-    ) {
-      return error(502, "COMMAND_INVALID_RESPONSE", "The command service returned an invalid response.");
+
+    if (action === "updateDestinationRule") {
+      const rule = (Array.isArray(body.rows) ? body.rows[0] : null) as
+        | DestinationRule
+        | null;
+      if (!rule?.id || !rule.wave?.trim() || !rule.drop?.trim()) {
+        throw new Error("Mapping destination tidak lengkap.");
+      }
+      const existing = data.destinationRules.some((item) => item.id === rule.id);
+      data.destinationRules = existing
+        ? data.destinationRules.map((item) => (item.id === rule.id ? rule : item))
+        : [...data.destinationRules, rule];
+      data.orders = data.orders.map((order) => {
+        const resolved = resolveDestinationRule(
+          order.destination,
+          data.sourceProfile.sourceDate,
+          data.destinationRules,
+        );
+        return {
+          ...order,
+          wave: resolved?.wave ?? "UNMAPPED",
+          drop: resolved?.drop ?? "UNMAPPED",
+          mappingStatus: resolved ? ("MAPPED" as const) : ("UNMAPPED" as const),
+        };
+      });
+      addAudit(
+        data,
+        user.email,
+        "Mapping routing diperbarui",
+        `${rule.destinationCode}: ${rule.wave} / ${rule.drop}.`,
+      );
     }
 
-    return NextResponse.json(
-      { ...(responsePayload as Record<string, unknown>), idempotencyKey },
-      { headers: { "Cache-Control": "no-store" } },
+    if (action === "updateStaffRoster") {
+      const picker = (Array.isArray(body.rows) ? body.rows[0] : null) as
+        | Picker
+        | null;
+      if (!picker?.id) throw new Error("Staff ID tidak valid.");
+      data.pickers = data.pickers.map((item) =>
+        item.id === picker.id ? picker : item,
+      );
+      addAudit(
+        data,
+        user.email,
+        "Profil picker diperbarui",
+        `${picker.id}: skill, shift, atau target override diperbarui.`,
+      );
+    }
+
+    if (action === "updateTargetRule") {
+      const rule = (Array.isArray(body.rows) ? body.rows[0] : null) as
+        | TargetRule
+        | null;
+      if (!rule || rule.targetQty <= 0 || rule.maxLoadPct <= 0) {
+        throw new Error("Target rule tidak valid.");
+      }
+      data.targetRules = data.targetRules.map((item) =>
+        item.mpStatus === rule.mpStatus ? rule : item,
+      );
+      addAudit(
+        data,
+        user.email,
+        "Target MP diperbarui",
+        `${rule.mpStatus}: ${rule.targetQty} unit / ${rule.maxLoadPct}% load.`,
+      );
+    }
+
+    if (action === "checkerDone" || action === "checkerReset") {
+      const routeId = String(body.routeId ?? "");
+      const status: CheckerState =
+        action === "checkerDone" ? "DONE" : "WAITING";
+      if (!data.checkerRoutes.some((route) => route.id === routeId)) {
+        throw new Error("Checker route tidak ditemukan.");
+      }
+      data.checkerRoutes = data.checkerRoutes.map((route) =>
+        route.id === routeId
+          ? {
+              ...route,
+              status,
+              worker: status === "DONE" ? user.displayName : null,
+              updatedAt: new Date().toLocaleTimeString("en-GB", {
+                hour: "2-digit",
+                minute: "2-digit",
+                timeZone: "Asia/Jakarta",
+              }),
+            }
+          : route,
+      );
+      addAudit(
+        data,
+        user.email,
+        status === "DONE" ? "Checker route selesai" : "Checker route dibuka ulang",
+        `${routeId} menjadi ${status}.`,
+      );
+    }
+
+    const now = new Date().toISOString();
+    await saveDatasetSnapshot(
+      data,
+      `command-${idempotencyKey}`,
+      data.sourceProfile.sourceDate.slice(0, 7),
+      now,
     );
+    return NextResponse.json({
+      ok: true,
+      message: "Perubahan tersimpan.",
+      idempotencyKey,
+      syncedAt: now,
+    });
   } catch (caught) {
-    const timedOut = caught instanceof Error && ["TimeoutError", "AbortError"].includes(caught.name);
     return error(
-      timedOut ? 504 : 503,
-      timedOut ? "COMMAND_TIMEOUT" : "COMMAND_UNAVAILABLE",
-      timedOut ? "The command timed out." : "The command service is unavailable.",
+      400,
+      "COMMAND_REJECTED",
+      caught instanceof Error ? caught.message : "Command ditolak.",
     );
   }
 }

@@ -61,9 +61,10 @@ test("server-renders the outbound assignment hub", async () => {
   assert.equal(response.headers.get("x-frame-options"), "DENY");
 
   const html = await response.text();
-  assert.match(html, /CBT Outbound Assignment Hub/i);
-  assert.match(html, /Assignment readiness/i);
-  assert.match(html, /Throughput per jam/i);
+  assert.match(html, /CBT Outbound Operations Hub/i);
+  assert.match(html, /Ringkasan outbound/i);
+  assert.match(html, /Request vs selesai pick/i);
+  assert.doesNotMatch(html, /Spatial operations|spatial-hero/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 
@@ -83,12 +84,14 @@ test("rejects unauthenticated live reads and commands", async () => {
 
 test("server-renders every operational area", async () => {
   const routes = [
-    ["/planning", /Assign picker/i],
-    ["/zones", /Zone workload monitor/i],
-    ["/people", /Staff roster/i],
-    ["/orders", /SO-zone index/i],
-    ["/checker", /Checker route board/i],
-    ["/reports", /Source contract/i],
+    ["/planning", /Pool assignment/i],
+    ["/zones", /Detail zona/i],
+    ["/people", /Roster picker/i],
+    ["/orders", /Index SO/i],
+    ["/checker", /Route checker/i],
+    ["/reports", /Kualitas sumber/i],
+    ["/settings", /Koneksi Superset/i],
+    ["/guide", /Alur kerja/i],
   ];
 
   for (const [pathname, expected] of routes) {

@@ -1,0 +1,480 @@
+import type {
+  ConnectorPublicConfig,
+  DemoDataset,
+  SyncHealth,
+} from "./outbound-types";
+
+async function runtimeBindings() {
+  const runtime = await import("cloudflare:workers");
+  return runtime.env;
+}
+
+const DEFAULT_PATH =
+  "/api/v1/chart/{sliceId}/data/?format=csv&force=true";
+const CONNECTOR_ID = "primary";
+const SNAPSHOT_ID = "current";
+const SNAPSHOT_KEY = "snapshots/current.json";
+
+type ConnectorRow = {
+  base_url: string;
+  so_slice_id: string;
+  staff_slice_id: string;
+  path_template: string;
+  cookie_ciphertext: string | null;
+  cookie_iv: string | null;
+  cookie_expires_at: string | null;
+  cookie_updated_at: string | null;
+  health: SyncHealth;
+  last_message: string | null;
+  last_verified_at: string | null;
+  updated_at: string;
+};
+
+type RunRow = {
+  started_at: string | null;
+  status: string | null;
+};
+
+type SnapshotRow = {
+  dataset_key: string;
+  fallback_payload: string | null;
+  synced_at: string;
+};
+
+export type StoredConnector = {
+  baseUrl: string;
+  soSliceId: string;
+  staffSliceId: string;
+  pathTemplate: string;
+  cookieCiphertext: string | null;
+  cookieIv: string | null;
+  cookieExpiresAt: string | null;
+  cookieUpdatedAt: string | null;
+  health: SyncHealth;
+  lastMessage: string | null;
+  lastVerifiedAt: string | null;
+  updatedAt: string;
+};
+
+export async function hasPersistentBindings() {
+  const env = await runtimeBindings();
+  return Boolean(env.DB && env.SNAPSHOTS);
+}
+
+export async function ensureRuntimeSchema() {
+  const env = await runtimeBindings();
+  if (!env.DB) return false;
+  const db = env.DB;
+  await db.batch([
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS sync_connector (
+        id TEXT PRIMARY KEY NOT NULL,
+        base_url TEXT NOT NULL DEFAULT '',
+        so_slice_id TEXT NOT NULL DEFAULT '',
+        staff_slice_id TEXT NOT NULL DEFAULT '',
+        path_template TEXT NOT NULL DEFAULT '${DEFAULT_PATH}',
+        cookie_ciphertext TEXT,
+        cookie_iv TEXT,
+        cookie_expires_at TEXT,
+        cookie_updated_at TEXT,
+        health TEXT NOT NULL DEFAULT 'NOT_CONFIGURED',
+        last_message TEXT,
+        last_verified_at TEXT,
+        updated_at TEXT NOT NULL
+      )
+    `),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS sync_runs (
+        id TEXT PRIMARY KEY NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        triggered_by TEXT NOT NULL,
+        month TEXT NOT NULL,
+        so_rows INTEGER NOT NULL DEFAULT 0,
+        staff_rows INTEGER NOT NULL DEFAULT 0,
+        dataset_key TEXT,
+        message TEXT
+      )
+    `),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS sync_runs_started_at_idx ON sync_runs (started_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS sync_runs_status_idx ON sync_runs (status)",
+    ),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS dataset_snapshots (
+        id TEXT PRIMARY KEY NOT NULL,
+        source_date TEXT NOT NULL,
+        month TEXT NOT NULL,
+        dataset_key TEXT NOT NULL,
+        fallback_payload TEXT,
+        so_rows INTEGER NOT NULL DEFAULT 0,
+        staff_rows INTEGER NOT NULL DEFAULT 0,
+        synced_at TEXT NOT NULL,
+        run_id TEXT NOT NULL
+      )
+    `),
+  ]);
+  return true;
+}
+
+export async function getStoredConnector(): Promise<StoredConnector> {
+  const env = await runtimeBindings();
+  const now = new Date().toISOString();
+  const fromEnvironment = {
+    baseUrl: process.env.SUPERSET_BASE_URL?.trim() ?? "",
+    soSliceId: process.env.SUPERSET_SO_SLICE_ID?.trim() ?? "",
+    staffSliceId: process.env.SUPERSET_STAFF_SLICE_ID?.trim() ?? "",
+    pathTemplate:
+      process.env.SUPERSET_EXPORT_PATH_TEMPLATE?.trim() || DEFAULT_PATH,
+  };
+  if (!env.DB) {
+    return {
+      ...fromEnvironment,
+      cookieCiphertext: null,
+      cookieIv: null,
+      cookieExpiresAt: process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() || null,
+      cookieUpdatedAt: null,
+      health:
+        fromEnvironment.baseUrl &&
+        fromEnvironment.soSliceId &&
+        fromEnvironment.staffSliceId
+          ? "READY"
+          : "NOT_CONFIGURED",
+      lastMessage: null,
+      lastVerifiedAt: null,
+      updatedAt: now,
+    };
+  }
+  await ensureRuntimeSchema();
+  const row = await env.DB.prepare(
+    `SELECT base_url, so_slice_id, staff_slice_id, path_template,
+            cookie_ciphertext, cookie_iv, cookie_expires_at, cookie_updated_at,
+            health, last_message, last_verified_at, updated_at
+       FROM sync_connector WHERE id = ?1`,
+  )
+    .bind(CONNECTOR_ID)
+    .first<ConnectorRow>();
+  if (!row) {
+    return {
+      ...fromEnvironment,
+      cookieCiphertext: null,
+      cookieIv: null,
+      cookieExpiresAt: process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() || null,
+      cookieUpdatedAt: null,
+      health:
+        fromEnvironment.baseUrl &&
+        fromEnvironment.soSliceId &&
+        fromEnvironment.staffSliceId
+          ? "READY"
+          : "NOT_CONFIGURED",
+      lastMessage: null,
+      lastVerifiedAt: null,
+      updatedAt: now,
+    };
+  }
+  return {
+    baseUrl: row.base_url || fromEnvironment.baseUrl,
+    soSliceId: row.so_slice_id || fromEnvironment.soSliceId,
+    staffSliceId: row.staff_slice_id || fromEnvironment.staffSliceId,
+    pathTemplate: row.path_template || fromEnvironment.pathTemplate,
+    cookieCiphertext: row.cookie_ciphertext,
+    cookieIv: row.cookie_iv,
+    cookieExpiresAt:
+      row.cookie_expires_at ||
+      process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() ||
+      null,
+    cookieUpdatedAt: row.cookie_updated_at,
+    health: row.health,
+    lastMessage: row.last_message,
+    lastVerifiedAt: row.last_verified_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function saveStoredConnector(
+  connector: StoredConnector,
+): Promise<void> {
+  const env = await runtimeBindings();
+  if (!env.DB) throw new Error("D1 binding DB belum tersedia.");
+  await ensureRuntimeSchema();
+  await env.DB.prepare(`
+    INSERT INTO sync_connector (
+      id, base_url, so_slice_id, staff_slice_id, path_template,
+      cookie_ciphertext, cookie_iv, cookie_expires_at, cookie_updated_at,
+      health, last_message, last_verified_at, updated_at
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+    ON CONFLICT(id) DO UPDATE SET
+      base_url = excluded.base_url,
+      so_slice_id = excluded.so_slice_id,
+      staff_slice_id = excluded.staff_slice_id,
+      path_template = excluded.path_template,
+      cookie_ciphertext = excluded.cookie_ciphertext,
+      cookie_iv = excluded.cookie_iv,
+      cookie_expires_at = excluded.cookie_expires_at,
+      cookie_updated_at = excluded.cookie_updated_at,
+      health = excluded.health,
+      last_message = excluded.last_message,
+      last_verified_at = excluded.last_verified_at,
+      updated_at = excluded.updated_at
+  `)
+    .bind(
+      CONNECTOR_ID,
+      connector.baseUrl,
+      connector.soSliceId,
+      connector.staffSliceId,
+      connector.pathTemplate,
+      connector.cookieCiphertext,
+      connector.cookieIv,
+      connector.cookieExpiresAt,
+      connector.cookieUpdatedAt,
+      connector.health,
+      connector.lastMessage,
+      connector.lastVerifiedAt,
+      connector.updatedAt,
+    )
+    .run();
+}
+
+function toBase64(bytes: Uint8Array) {
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary);
+}
+
+function fromBase64(value: string) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function cookieKey() {
+  const secret = process.env.SUPERSET_COOKIE_ENCRYPTION_KEY?.trim() ?? "";
+  if (secret.length < 32) {
+    throw new Error(
+      "SUPERSET_COOKIE_ENCRYPTION_KEY minimal 32 karakter belum dikonfigurasi.",
+    );
+  }
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(secret),
+  );
+  return crypto.subtle.importKey("raw", digest, "AES-GCM", false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+export async function encryptCookie(value: string) {
+  const key = await cookieKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(value),
+  );
+  return {
+    ciphertext: toBase64(new Uint8Array(encrypted)),
+    iv: toBase64(iv),
+  };
+}
+
+export async function getSessionCookie(connector: StoredConnector) {
+  const environmentCookie = process.env.SUPERSET_SESSION_COOKIE?.trim();
+  if (environmentCookie) return environmentCookie;
+  if (!connector.cookieCiphertext || !connector.cookieIv) return "";
+  const key = await cookieKey();
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: fromBase64(connector.cookieIv) },
+    key,
+    fromBase64(connector.cookieCiphertext),
+  );
+  return new TextDecoder().decode(decrypted);
+}
+
+export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig> {
+  const env = await runtimeBindings();
+  const connector = await getStoredConnector();
+  const expiryTime = connector.cookieExpiresAt
+    ? Date.parse(connector.cookieExpiresAt)
+    : Number.NaN;
+  const cookieExpired =
+    Number.isFinite(expiryTime) && expiryTime <= Date.now();
+  let lastRun: RunRow | null = null;
+  if (env.DB) {
+    lastRun = await env.DB.prepare(
+      "SELECT started_at, status FROM sync_runs ORDER BY started_at DESC LIMIT 1",
+    ).first<RunRow>();
+  }
+  const environmentCookie = Boolean(
+    process.env.SUPERSET_SESSION_COOKIE?.trim(),
+  );
+  return {
+    baseUrl: connector.baseUrl,
+    soSliceId: connector.soSliceId,
+    staffSliceId: connector.staffSliceId,
+    pathTemplate: connector.pathTemplate,
+    currentMonthOnly: true,
+    cookiePresent: environmentCookie || Boolean(connector.cookieCiphertext),
+    cookieSource: environmentCookie
+      ? "environment"
+      : connector.cookieCiphertext
+        ? "stored"
+        : "none",
+    cookieExpiresAt: connector.cookieExpiresAt,
+    cookieUpdatedAt: connector.cookieUpdatedAt,
+    encryptionReady:
+      (process.env.SUPERSET_COOKIE_ENCRYPTION_KEY?.trim().length ?? 0) >= 32,
+    health: cookieExpired ? "EXPIRED" : connector.health,
+    lastMessage: connector.lastMessage,
+    lastVerifiedAt: connector.lastVerifiedAt,
+    lastRunAt: lastRun?.started_at ?? null,
+    lastRunStatus: lastRun?.status ?? null,
+  };
+}
+
+export async function beginSyncRun(
+  id: string,
+  triggeredBy: string,
+  month: string,
+) {
+  const env = await runtimeBindings();
+  if (!env.DB) return;
+  await ensureRuntimeSchema();
+  await env.DB.prepare(
+    `INSERT INTO sync_runs
+      (id, started_at, status, triggered_by, month)
+     VALUES (?1, ?2, 'RUNNING', ?3, ?4)`,
+  )
+    .bind(id, new Date().toISOString(), triggeredBy, month)
+    .run();
+}
+
+export async function finishSyncRun(input: {
+  id: string;
+  status: "SUCCESS" | "ERROR";
+  soRows: number;
+  staffRows: number;
+  message: string;
+  datasetKey?: string;
+}) {
+  const env = await runtimeBindings();
+  if (!env.DB) return;
+  await env.DB.prepare(
+    `UPDATE sync_runs
+        SET finished_at = ?1, status = ?2, so_rows = ?3, staff_rows = ?4,
+            dataset_key = ?5, message = ?6
+      WHERE id = ?7`,
+  )
+    .bind(
+      new Date().toISOString(),
+      input.status,
+      input.soRows,
+      input.staffRows,
+      input.datasetKey ?? null,
+      input.message,
+      input.id,
+    )
+    .run();
+}
+
+export async function saveDatasetSnapshot(
+  dataset: DemoDataset,
+  runId: string,
+  month: string,
+  syncedAt: string,
+) {
+  const env = await runtimeBindings();
+  const payload = JSON.stringify(dataset);
+  if (env.SNAPSHOTS) {
+    await env.SNAPSHOTS.put(SNAPSHOT_KEY, payload, {
+      httpMetadata: { contentType: "application/json" },
+      customMetadata: { runId, month, syncedAt },
+    });
+  }
+  if (env.DB) {
+    await ensureRuntimeSchema();
+    const fallbackPayload = payload.length <= 1_500_000 ? payload : null;
+    await env.DB.prepare(`
+      INSERT INTO dataset_snapshots (
+        id, source_date, month, dataset_key, fallback_payload,
+        so_rows, staff_rows, synced_at, run_id
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+      ON CONFLICT(id) DO UPDATE SET
+        source_date = excluded.source_date,
+        month = excluded.month,
+        dataset_key = excluded.dataset_key,
+        fallback_payload = excluded.fallback_payload,
+        so_rows = excluded.so_rows,
+        staff_rows = excluded.staff_rows,
+        synced_at = excluded.synced_at,
+        run_id = excluded.run_id
+    `)
+      .bind(
+        SNAPSHOT_ID,
+        dataset.sourceProfile.sourceDate,
+        month,
+        SNAPSHOT_KEY,
+        fallbackPayload,
+        dataset.sourceProfile.soRows,
+        dataset.sourceProfile.staffRows,
+        syncedAt,
+        runId,
+      )
+      .run();
+  }
+  return SNAPSHOT_KEY;
+}
+
+export async function loadDatasetSnapshot(): Promise<{
+  data: DemoDataset;
+  syncedAt: string;
+} | null> {
+  const env = await runtimeBindings();
+  let row: SnapshotRow | null = null;
+  if (env.DB) {
+    await ensureRuntimeSchema();
+    row = await env.DB.prepare(
+      "SELECT dataset_key, fallback_payload, synced_at FROM dataset_snapshots WHERE id = ?1",
+    )
+      .bind(SNAPSHOT_ID)
+      .first<SnapshotRow>();
+  }
+  const key = row?.dataset_key ?? SNAPSHOT_KEY;
+  if (env.SNAPSHOTS) {
+    const object = await env.SNAPSHOTS.get(key);
+    if (object) {
+      return {
+        data: await object.json<DemoDataset>(),
+        syncedAt: row?.synced_at ?? new Date().toISOString(),
+      };
+    }
+  }
+  if (row?.fallback_payload) {
+    return {
+      data: JSON.parse(row.fallback_payload) as DemoDataset,
+      syncedAt: row.synced_at,
+    };
+  }
+  return null;
+}
+
+export async function saveRawExport(
+  month: string,
+  resource: "so" | "staff",
+  body: string,
+  contentType: string,
+) {
+  const env = await runtimeBindings();
+  if (!env.SNAPSHOTS) return null;
+  const extension = contentType.includes("json") ? "json" : "csv";
+  const key = `raw/${month}/${resource}-latest.${extension}`;
+  await env.SNAPSHOTS.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: { month, resource, savedAt: new Date().toISOString() },
+  });
+  return key;
+}

@@ -12,6 +12,7 @@ import {
 } from "react";
 import { createDemoDataset } from "@/lib/demo-data";
 import {
+  buildManualAssignments,
   buildBulkUploadRows,
   proposeAssignments,
   resolveDestinationRule,
@@ -24,6 +25,7 @@ import type {
   DemoDataset,
   DestinationRule,
   Picker,
+  ManualAssignmentInput,
   TargetRule,
 } from "@/lib/outbound-types";
 
@@ -48,7 +50,11 @@ type OutboundContextValue = {
   applyPlan: () => void;
   clearNotice: () => void;
   optimize: (filter: AssignmentFilter) => void;
-  refresh: (options?: { quiet?: boolean }) => Promise<void>;
+  refresh: (options?: {
+    quiet?: boolean;
+    forceSource?: boolean;
+  }) => Promise<void>;
+  stageManual: (input: ManualAssignmentInput) => void;
   setCheckerStatus: (routeId: string, status: CheckerState) => void;
   setProposals: (proposals: AssignmentProposal[]) => void;
   updatePicker: (picker: Picker) => void;
@@ -107,13 +113,32 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
   );
 
   const refresh = useCallback(
-    async ({ quiet = false }: { quiet?: boolean } = {}) => {
+    async ({
+      quiet = false,
+      forceSource = false,
+    }: { quiet?: boolean; forceSource?: boolean } = {}) => {
       refreshAbort.current?.abort();
       const controller = new AbortController();
       refreshAbort.current = controller;
       setPhase("syncing");
 
       try {
+        if (forceSource) {
+          const syncResponse = await fetch("/api/outbound/sync", {
+            method: "POST",
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          });
+          const syncPayload = (await syncResponse.json()) as {
+            message?: string;
+            ok?: boolean;
+          };
+          if (!syncResponse.ok || syncPayload.ok !== true) {
+            throw new Error(
+              syncPayload.message || "Sinkronisasi Superset gagal.",
+            );
+          }
+        }
         const response = await fetch("/api/outbound?resource=dataset", {
           cache: "no-store",
           headers: { Accept: "application/json" },
@@ -141,8 +166,10 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
         if (!quiet) {
           showNotice(
             "success",
-            "Data live tersinkron",
-            "Roster, SO-zone, target, dan konfigurasi telah diperbarui.",
+            forceSource ? "Snapshot Superset diperbarui" : "Data live dimuat",
+            forceSource
+              ? "Data bulan berjalan telah ditarik dan diagregasi."
+              : "Snapshot terbaru siap digunakan.",
           );
         }
       } catch (caught) {
@@ -245,6 +272,37 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       );
     },
     [data.orders, data.pickers, data.targetRules, selectedOrders, showNotice],
+  );
+
+  const stageManual = useCallback(
+    (input: ManualAssignmentInput) => {
+      const manual = buildManualAssignments(
+        data.orders,
+        data.pickers,
+        data.targetRules,
+        input,
+      );
+      if (!manual.length) {
+        showNotice(
+          "error",
+          "Assignment manual ditahan",
+          "Periksa picker, guardrail, atau alasan override.",
+        );
+        return;
+      }
+      const affected = new Set(manual.map((proposal) => proposal.orderId));
+      setProposals((current) => [
+        ...current.filter((proposal) => !affected.has(proposal.orderId)),
+        ...manual,
+      ]);
+      setSelectedOrders(new Set(manual.map((proposal) => proposal.orderId)));
+      showNotice(
+        input.allowOverride ? "warning" : "success",
+        "Assignment manual di-stage",
+        `${manual.length} split siap direview sebelum apply.`,
+      );
+    },
+    [data.orders, data.pickers, data.targetRules, showNotice],
   );
 
   const applyPlan = useCallback(() => {
@@ -350,9 +408,14 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
         return;
       }
       setData((current) => {
-        const rules = current.destinationRules.map((item) =>
-          item.id === rule.id ? rule : item,
+        const exists = current.destinationRules.some(
+          (item) => item.id === rule.id,
         );
+        const rules = exists
+          ? current.destinationRules.map((item) =>
+              item.id === rule.id ? rule : item,
+            )
+          : [...current.destinationRules, rule];
         return {
           ...current,
           destinationRules: rules,
@@ -478,6 +541,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       clearNotice: () => setNotice(null),
       optimize,
       refresh,
+      stageManual,
       setCheckerStatus,
       setProposals,
       updatePicker,
@@ -495,6 +559,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       phase,
       proposals,
       refresh,
+      stageManual,
       selectedOrders,
       setCheckerStatus,
       updatePicker,

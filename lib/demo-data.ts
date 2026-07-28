@@ -188,12 +188,17 @@ for (let orderIndex = 0; orderIndex < 38; orderIndex += 1) {
       originId: "819",
       originLocationName: "CBT - WH Cibitung",
       productId: String(2_700 + orderIndex * 10 + lineIndex),
+      productName: `Demo Product ${orderIndex + 1}-${lineIndex + 1}`,
       skuNumber: String(899_000_000_000 + orderIndex * 100 + lineIndex),
       destination,
       status,
       priority: orderIndex % 5 === 0 ? "High" : orderIndex % 3 === 0 ? "Medium" : "Low",
       originRackName: `CBT-${zone}-${String(2 + lineIndex).padStart(2, "0")}-${String(4 + orderIndex % 12).padStart(2, "0")}-L${1 + (lineIndex % 3)}-01`,
       pickingAreaName: area,
+      pickingStaffId: null,
+      pickerName: null,
+      pickingStartAt: null,
+      pickingEndAt: null,
       requestQty: 45 + ((orderIndex * 31 + lineIndex * 17) % 210),
     });
   }

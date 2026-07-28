@@ -79,7 +79,7 @@ export function KpiCard({
   );
 }
 
-const statusTone: Record<OrderStatus, string> = {
+const statusTone: Record<string, string> = {
   NEW: "monitor",
   ASSIGNED: "info",
   PICKING: "accent",
@@ -93,7 +93,14 @@ const statusTone: Record<OrderStatus, string> = {
 };
 
 export function OrderStatusBadge({ status }: { status: OrderStatus }) {
-  return <span className={`badge badge-${statusTone[status]}`}>{status}</span>;
+  const tone =
+    statusTone[status.toUpperCase()] ??
+    (status.toUpperCase().includes("DELIVER")
+      ? "normal"
+      : status.toUpperCase().includes("PROGRESS")
+        ? "accent"
+        : "info");
+  return <span className={`badge badge-${tone}`}>{status}</span>;
 }
 
 export function AlertBadge({ state }: { state: AlertState }) {

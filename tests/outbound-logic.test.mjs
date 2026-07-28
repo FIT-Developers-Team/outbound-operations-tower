@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildBulkUploadRows,
+  buildManualAssignments,
   bulkAuditCsv,
+  checkManualAssignment,
+  compareRouteLabels,
   deriveMpStatus,
   isEligiblePicker,
   minutesUntil,
@@ -51,6 +54,36 @@ function proposal(overrides = {}) {
     reason: "zone match",
     projectedLoadPct: 10,
     blockingReason: null,
+    mode: "RECOMMENDATION",
+    operatorNote: null,
+    ...overrides,
+  };
+}
+
+function picker(overrides = {}) {
+  return {
+    id: "P-1",
+    name: "Picker One",
+    joinDate: "2026-06-01",
+    tenureDays: 58,
+    mpStatus: "REGULER",
+    mpStatusOverride: null,
+    scheduleStartTime: "2026-07-28 05:00:00",
+    scheduleDescription: "P5 (05:00 - 14:00)",
+    role: "OUTBOUND_PICKER_STAFF",
+    shift: "PAGI",
+    checkedIn: true,
+    isActive: true,
+    zones: ["MZA1", "MZA2"],
+    waves: ["WAVE 12"],
+    targetQty: 1_000,
+    targetOverride: null,
+    targetPerHour: 125,
+    activeHours: 2,
+    assignedQty: 100,
+    pickedQty: 80,
+    totalSo: 1,
+    state: "ACTIVE",
     ...overrides,
   };
 }
@@ -134,4 +167,75 @@ test("CSV exports neutralize spreadsheet formulas", () => {
   assert.match(csv, /'=1\+1/);
   assert.match(csv, /'\+PICKER/);
   assert.match(csv, /'@operator/);
+});
+
+test("routing labels are dynamic and naturally sorted", () => {
+  const labels = ["WAVE 12", "WAVE 2+", "WAVE 2", "EXPRESS", "UNMAPPED"];
+  assert.deepEqual(labels.sort(compareRouteLabels), [
+    "WAVE 2",
+    "WAVE 2+",
+    "WAVE 12",
+    "EXPRESS",
+    "UNMAPPED",
+  ]);
+});
+
+test("manual assignment locks all SO splits and requires a reason for override", () => {
+  const orders = [
+    order(),
+    order({ id: "SO-1::MZA2", zone: "MZA2", requestQty: 80 }),
+  ];
+  const targetRules = [
+    {
+      mpStatus: "REGULER",
+      targetQty: 1_000,
+      maxLoadPct: 100,
+      description: "Regular",
+    },
+  ];
+  const baseInput = {
+    orderIds: ["SO-1::MZA1"],
+    pickerId: "P-1",
+    lockWholeSo: true,
+    requireActive: true,
+    requireCheckIn: true,
+    requireRole: true,
+    requireShift: true,
+    requireZone: true,
+    enforceCapacity: true,
+    allowOverride: false,
+    note: "",
+  };
+  const valid = checkManualAssignment(
+    orders,
+    [picker()],
+    targetRules,
+    baseInput,
+  );
+  assert.equal(valid.orderIds.length, 2);
+  assert.equal(valid.canStage, true);
+  assert.equal(
+    buildManualAssignments(orders, [picker()], targetRules, baseInput).length,
+    2,
+  );
+
+  const invalid = checkManualAssignment(
+    orders,
+    [picker({ zones: [] })],
+    targetRules,
+    baseInput,
+  );
+  assert.equal(invalid.canStage, false);
+  assert.match(invalid.violations.join(" "), /Skill zona/);
+  const overridden = checkManualAssignment(
+    orders,
+    [picker({ zones: [] })],
+    targetRules,
+    {
+      ...baseInput,
+      allowOverride: true,
+      note: "Disetujui TL karena prioritas ekspedisi.",
+    },
+  );
+  assert.equal(overridden.canStage, true);
 });

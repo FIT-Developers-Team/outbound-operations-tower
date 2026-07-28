@@ -4,9 +4,10 @@ import type {
   AssignmentProposal,
   BulkUploadRow,
   DestinationRule,
-  Drop,
   MpStatus,
   Picker,
+  ManualAssignmentCheck,
+  ManualAssignmentInput,
   ShiftCode,
   SupplyOrder,
   SupplyOrderLine,
@@ -16,26 +17,24 @@ import type {
 
 export const number = new Intl.NumberFormat("en-US");
 
-const waveRank: Record<Wave, number> = {
-  "WAVE 1": 1,
-  "WAVE 1+": 2,
-  "WAVE 2": 3,
-  "WAVE 3": 4,
-  "WAVE 4": 5,
-  "WAVE 4+": 6,
-  UNMAPPED: 99,
-};
-
-const dropRank: Record<Drop, number> = {
-  "DROP 1": 1,
-  "DROP 2": 2,
-  "DROP 3": 3,
-  "DROP 4": 4,
-  "DROP 5": 5,
-  UNMAPPED: 99,
-};
-
 const priorityRank = { High: 1, Medium: 2, Low: 3 } as const;
+
+/**
+ * Sort arbitrary routing labels naturally. A new WAVE/DROP label remains
+ * usable immediately; no enum or ranking table needs to be updated.
+ */
+export function routeLabelRank(label: string) {
+  const normalized = label.trim().toUpperCase();
+  if (!normalized || normalized === "UNMAPPED") return 9_999_999;
+  const numeric = normalized.match(/(\d+(?:\.\d+)?)/);
+  const base = numeric ? Number(numeric[1]) * 100 : 8_000_000;
+  const suffix = normalized.includes("+") ? 50 : 0;
+  return base + suffix;
+}
+
+export function compareRouteLabels(a: string, b: string) {
+  return routeLabelRank(a) - routeLabelRank(b) || a.localeCompare(b, "id");
+}
 
 export function clamp(value: number, minimum = 0, maximum = 100) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -175,11 +174,18 @@ export function splitSupplyOrderLines(
       status: first.status,
       priority: first.priority,
       requestQty: rows.reduce((sum, row) => sum + row.requestQty, 0),
-      pickedQty: 0,
+      pickedQty: rows.reduce(
+        (sum, row) => sum + (row.pickingEndAt ? row.requestQty : 0),
+        0,
+      ),
       skuCount: new Set(rows.map((row) => row.skuNumber)).size,
       lineCount: rows.length,
       rackLevel: [...new Set(levels)].join(", ") || "-",
-      pickerId: null,
+      pickerId:
+        [...new Set(rows.map((row) => row.pickingStaffId).filter(Boolean))].length ===
+        1
+          ? rows.find((row) => row.pickingStaffId)?.pickingStaffId ?? null
+          : null,
       shift: "PAGI",
       deadline: "14:00",
       createdAt: first.createdAt,
@@ -352,8 +358,8 @@ export function proposeAssignments(
     )
     .sort(
       (a, b) =>
-        waveRank[a.wave] - waveRank[b.wave] ||
-        dropRank[a.drop] - dropRank[b.drop] ||
+        compareRouteLabels(a.wave, b.wave) ||
+        compareRouteLabels(a.drop, b.drop) ||
         priorityRank[a.priority] - priorityRank[b.priority] ||
         a.createdAt.localeCompare(b.createdAt) ||
         b.requestQty - a.requestQty ||
@@ -424,6 +430,8 @@ export function proposeAssignments(
         reason: `Butuh picker aktif, check-in, shift ${order.shift}, dan skill zona ${order.zone}.`,
         projectedLoadPct: 0,
         blockingReason: "NO_ELIGIBLE_PICKER",
+        mode: "RECOMMENDATION" as const,
+        operatorNote: null,
       };
     }
 
@@ -455,8 +463,125 @@ export function proposeAssignments(
       reason,
       projectedLoadPct: best.projectedLoadPct,
       blockingReason: best.overCapacity ? "OVER_TARGET_REVIEW" : null,
+      mode: "RECOMMENDATION" as const,
+      operatorNote: null,
     };
   });
+}
+
+export function checkManualAssignment(
+  orders: SupplyOrder[],
+  pickers: Picker[],
+  targetRules: TargetRule[],
+  input: ManualAssignmentInput,
+): ManualAssignmentCheck {
+  const requested = new Set(input.orderIds);
+  const initial = orders.filter((order) => requested.has(order.id));
+  const soNumbers = new Set(initial.map((order) => order.soNumber));
+  const scoped = input.lockWholeSo
+    ? orders.filter(
+        (order) =>
+          soNumbers.has(order.soNumber) &&
+          order.status === "NEW" &&
+          order.pickerId === null,
+      )
+    : initial;
+  const picker = pickers.find((candidate) => candidate.id === input.pickerId);
+  const violations: string[] = [];
+  if (!scoped.length) violations.push("Tidak ada SO yang dapat di-stage.");
+  if (!picker) violations.push("Picker tidak ditemukan.");
+
+  const totalQty = scoped.reduce((sum, order) => sum + order.requestQty, 0);
+  const target = picker ? Math.max(1, effectiveTarget(picker, targetRules)) : 1;
+  const projectedLoadPct = picker
+    ? ((picker.assignedQty + totalQty) / target) * 100
+    : 0;
+
+  if (picker) {
+    if (input.requireActive && (!picker.isActive || picker.state === "OFFLINE")) {
+      violations.push("Picker tidak aktif.");
+    }
+    if (input.requireCheckIn && !picker.checkedIn) {
+      violations.push("Picker belum check-in.");
+    }
+    if (input.requireRole && picker.role !== "OUTBOUND_PICKER_STAFF") {
+      violations.push("Role picker tidak sesuai.");
+    }
+    if (
+      input.requireShift &&
+      scoped.some((order) => order.shift !== picker.shift)
+    ) {
+      violations.push("Shift picker tidak sama dengan shift SO.");
+    }
+    if (
+      input.requireZone &&
+      scoped.some((order) => !picker.zones.includes(order.zone))
+    ) {
+      violations.push("Skill zona picker belum mencakup semua split.");
+    }
+    const rule = targetRules.find(
+      (candidate) => candidate.mpStatus === effectiveMpStatus(picker),
+    );
+    if (
+      input.enforceCapacity &&
+      projectedLoadPct > (rule?.maxLoadPct ?? 100)
+    ) {
+      violations.push(
+        `Projected load ${Math.round(projectedLoadPct)}% melewati batas ${
+          rule?.maxLoadPct ?? 100
+        }%.`,
+      );
+    }
+  }
+
+  const validOverride =
+    input.allowOverride && input.note.trim().length >= 8 && Boolean(picker);
+  return {
+    orderIds: scoped.map((order) => order.id),
+    pickerId: input.pickerId,
+    totalQty,
+    projectedLoadPct,
+    violations,
+    canStage: Boolean(picker) && scoped.length > 0 && (!violations.length || validOverride),
+  };
+}
+
+export function buildManualAssignments(
+  orders: SupplyOrder[],
+  pickers: Picker[],
+  targetRules: TargetRule[],
+  input: ManualAssignmentInput,
+): AssignmentProposal[] {
+  const check = checkManualAssignment(orders, pickers, targetRules, input);
+  if (!check.canStage) return [];
+  const picker = pickers.find((candidate) => candidate.id === input.pickerId);
+  if (!picker) return [];
+  const orderIds = new Set(check.orderIds);
+  const target = effectiveTarget(picker, targetRules);
+  const overridden = check.violations.length > 0;
+
+  return orders
+    .filter((order) => orderIds.has(order.id))
+    .map((order) => ({
+      orderId: order.id,
+      soNumber: order.soNumber,
+      zone: order.zone,
+      pickerId: picker.id,
+      pickerName: picker.name,
+      mpStatus: effectiveMpStatus(picker),
+      targetQty: target,
+      score: overridden ? 1 : 100,
+      confidence: overridden ? ("LOW" as const) : ("HIGH" as const),
+      reason: overridden
+        ? `Override manual: ${check.violations.join(" ")}`
+        : `Manual: ${picker.shift} / ${order.zone} / ${Math.round(
+            check.projectedLoadPct,
+          )}% target`,
+      projectedLoadPct: check.projectedLoadPct,
+      blockingReason: null,
+      mode: "MANUAL" as const,
+      operatorNote: input.note.trim() || null,
+    }));
 }
 
 export function buildBulkUploadRows(
@@ -531,8 +656,8 @@ export function buildBulkUploadRows(
     })
     .sort(
       (a, b) =>
-        waveRank[a.wave] - waveRank[b.wave] ||
-        dropRank[a.drop] - dropRank[b.drop] ||
+        compareRouteLabels(a.wave, b.wave) ||
+        compareRouteLabels(a.drop, b.drop) ||
         a.soNumber.localeCompare(b.soNumber),
     );
 }
@@ -611,7 +736,10 @@ export function assessDataQuality(orders: SupplyOrder[], pickers: Picker[]) {
       invalidQuantities += 1;
     }
     if (order.mappingStatus === "UNMAPPED") unmappedDestinations += 1;
-    if (order.status !== "NEW" && order.status !== "HOLD" && !order.pickerId) {
+    if (
+      !["NEW", "HOLD"].includes(order.status.toUpperCase()) &&
+      !order.pickerId
+    ) {
       invalidAssignments += 1;
     }
     if (order.pickerId && !pickerIds.has(order.pickerId)) unknownPickers += 1;
