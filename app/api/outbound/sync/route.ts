@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
 import {
+  acquireSyncLease,
   beginSyncRun,
   finishSyncRun,
   getStoredConnector,
+  releaseSyncLease,
   saveStoredConnector,
 } from "@/lib/runtime-storage";
 import { jakartaMonth, syncFromSuperset } from "@/lib/superset-sync";
@@ -45,8 +47,16 @@ export async function POST(request: NextRequest) {
 
   const runId = crypto.randomUUID();
   const month = jakartaMonth().key;
-  await beginSyncRun(runId, user.email, month);
+  const lease = await acquireSyncLease();
+  if (!lease.acquired) {
+    return error(
+      409,
+      "SYNC_ALREADY_RUNNING",
+      "Sync lain masih berjalan. Snapshot akan diperbarui setelah proses selesai.",
+    );
+  }
   try {
+    await beginSyncRun(runId, user.email, month);
     const result = await syncFromSuperset(runId);
     const message = `${result.soRows.toLocaleString("id-ID")} baris SO dan ${result.staffRows.toLocaleString("id-ID")} baris staff tersinkron.`;
     await finishSyncRun({
@@ -87,5 +97,7 @@ export async function POST(request: NextRequest) {
       expired ? "SUPERSET_SESSION_EXPIRED" : "SUPERSET_SYNC_FAILED",
       message,
     );
+  } finally {
+    await releaseSyncLease(lease.token);
   }
 }

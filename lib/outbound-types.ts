@@ -24,6 +24,7 @@ export type SupplyOrderLine = {
   skuNumber: string;
   destination: string;
   status: OrderStatus;
+  remarks: string;
   priority: "High" | "Medium" | "Low";
   originRackName: string;
   pickingAreaName: string;
@@ -32,6 +33,15 @@ export type SupplyOrderLine = {
   pickingStartAt: string | null;
   pickingEndAt: string | null;
   requestQty: number;
+};
+
+export type SkuDetail = {
+  skuNumber: string;
+  productId: string;
+  productName: string;
+  requestQty: number;
+  pickedQty: number;
+  lineCount: number;
 };
 
 /**
@@ -52,9 +62,11 @@ export type SupplyOrder = {
   mappingStatus: "MAPPED" | "UNMAPPED";
   status: OrderStatus;
   priority: "High" | "Medium" | "Low";
+  remarks: string[];
   requestQty: number;
   pickedQty: number;
   skuCount: number;
+  skuDetails: SkuDetail[];
   lineCount: number;
   rackLevel: string;
   pickerId: string | null;
@@ -114,11 +126,13 @@ export type ZoneRule = {
 };
 
 export type AssignmentFilter = {
-  shift: ShiftCode | "ALL";
+  shifts: ShiftCode[];
+  scheduleDescriptions: string[];
   mpStatuses: MpStatus[];
   zones: string[];
   waves: Wave[];
   drops: Drop[];
+  remarks: string[];
 };
 
 export type CheckerRoute = {
@@ -234,6 +248,7 @@ export type ConnectorPublicConfig = {
   soSliceId: string;
   staffSliceId: string;
   pathTemplate: string;
+  refreshIntervalMinutes: number;
   currentMonthOnly: true;
   cookiePresent: boolean;
   cookieSource: "stored" | "environment" | "none";

@@ -192,6 +192,14 @@ for (let orderIndex = 0; orderIndex < 38; orderIndex += 1) {
       skuNumber: String(899_000_000_000 + orderIndex * 100 + lineIndex),
       destination,
       status,
+      remarks:
+        orderIndex % 7 === 0
+          ? "INTERWAREHOUSE_TRANSFER"
+          : orderIndex % 5 === 0
+            ? "DRY-FOOD"
+            : orderIndex % 3 === 0
+              ? "PRIORITY_REPLENISHMENT"
+              : "REGULAR_OUTBOUND",
       priority: orderIndex % 5 === 0 ? "High" : orderIndex % 3 === 0 ? "Medium" : "Low",
       originRackName: `CBT-${zone}-${String(2 + lineIndex).padStart(2, "0")}-${String(4 + orderIndex % 12).padStart(2, "0")}-L${1 + (lineIndex % 3)}-01`,
       pickingAreaName: area,
@@ -271,6 +279,8 @@ export function createDemoDataset(): DemoDataset {
       ...order,
       pickingAreaNames: [...order.pickingAreaNames],
       originRackNames: [...order.originRackNames],
+      remarks: [...order.remarks],
+      skuDetails: order.skuDetails.map((sku) => ({ ...sku })),
     })),
     pickers: pickers.map((picker) => ({
       ...picker,
@@ -301,10 +311,10 @@ export function createDemoDataset(): DemoDataset {
       eligiblePickers: 158,
       checkedInRows: 381,
       qualityNotes: [
-        "SO source grain is product/rack, not one row per SO.",
-        "Only status NEW is eligible for a new assignment.",
-        "Wave and Drop are configuration, not source columns.",
-        "105 staff rows have no schedule role and 406 rows have no check-in.",
+        "Data SO berasal dari level produk/rack, bukan satu baris per SO.",
+        "Hanya SO berstatus NEW yang dapat menerima assignment baru.",
+        "Wave dan Drop berasal dari konfigurasi, bukan kolom sumber.",
+        "105 baris staff belum memiliki jadwal dan 406 belum check-in.",
       ],
     },
   };

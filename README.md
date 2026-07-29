@@ -8,13 +8,15 @@ Versi ini mengganti alur Google Sheets + Apps Script dengan konektor Superset la
 
 - Overview baru tanpa hero, animasi, atau 3D interaktif yang membebani browser.
 - UI responsif, ringkas, memakai Bahasa Indonesia yang lebih operasional.
-- Refresh Superset dapat dipicu melalui tombol **Sync sekarang**.
-- Cookie Superset disimpan terenkripsi, memiliki status kedaluwarsa, dan dapat dirotasi dari halaman Konfigurasi.
+- Refresh Superset dapat dipicu melalui tombol **Sync sekarang** atau interval 1–60 menit.
+- Cookie Superset disimpan terenkripsi dan dapat diganti dari halaman Konfigurasi tanpa menampilkan nilai lama.
 - Sync selalu membatasi data ke bulan berjalan dalam zona waktu Asia/Jakarta.
 - Snapshot terolah dilayani dari R2/D1 sehingga refresh tampilan tidak mengunduh ulang data Superset.
 - Wave dan Drop menerima label bebas; jumlah maupun namanya tidak dikunci.
-- Assignment picker mendukung rekomendasi dan mode manual dengan validasi detail.
-- Visualisasi meliputi hourly throughput, backlog per zona, status order, scatter kapasitas picker, dan histogram kuantitas.
+- Assignment picker mendukung rekomendasi, filter multi-pilihan, dan pembagian manual ke banyak picker berdasarkan Staff ID/nama.
+- Dashboard Picker menampilkan Top 10, durasi, unit/jam, output harian, output per SKU/SO, serta picker on duty per shift dan jadwal.
+- Supply Order memiliki filter lengkap, pencarian produk/SKU/remark, dan rincian SKU per SO.
+- Visualisasi menampilkan nilai langsung agar terbaca jelas saat diambil sebagai screenshot.
 - Halaman Panduan berisi alur kerja interaktif dan troubleshooting.
 - Tidak ada Google Sheets, Apps Script, DuckDB, WebGL, atau dependency charting besar.
 
@@ -55,17 +57,17 @@ Cloudflare memiliki free tier untuk D1 dan R2, tetapi “gratis” tetap berarti
 - [Cloudflare D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/)
 - [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/)
 
-### Real-time yang realistis
+### Near-real-time yang realistis
 
 Tanpa akses database, Superset API resmi, SQL Lab, atau kredensial machine-to-machine, sistem tidak dapat menjadi streaming real-time sejati. Implementasi ini memakai model **near-real-time on demand**:
 
-1. pengguna menekan **Sync sekarang**;
+1. pengguna menekan **Sync sekarang** atau interval otomatis berjalan;
 2. server mengunduh dua slice Superset secara paralel;
 3. data divalidasi dan dibatasi ke bulan berjalan;
 4. snapshot baru ditulis secara atomik;
 5. UI membaca snapshot terbaru.
 
-Auto-refresh lima menit hanya membaca snapshot dan tidak terus-menerus memukul Superset. Ini sengaja memisahkan “refresh layar” dari “refresh sumber”.
+Interval dapat diatur 1, 2, 3, 5, 10, 15, 30, atau 60 menit. Web Locks mencegah tab browser yang sama melakukan sync bersamaan, sedangkan lease atomik D1 mencegah sync ganda lintas tab/perangkat. Bila Superset lambat atau sesi berakhir, snapshot terakhir tetap dapat dibaca.
 
 ## Kontrak data sumber
 
@@ -157,7 +159,7 @@ Sample pengguna menghasilkan:
 - 24 zona picking;
 - 787 row staff;
 - 175 picker pada role sumber;
-- 162 picker eligible pada filter sumber;
+- 158 picker eligible pada filter sumber;
 - 245.059 completed line quantity;
 - 17 titik hourly throughput.
 
@@ -205,7 +207,7 @@ Rekomendasi mempertimbangkan:
 
 ### Assignment manual
 
-Mode manual bukan sekadar memilih hasil rekomendasi. Operator dapat memilih SO, zona/seluruh split, shift, dan picker. Sistem menampilkan guardrail:
+Mode manual bukan sekadar memilih hasil rekomendasi. Operator dapat memilih SO, zona/seluruh split, dan beberapa picker sekaligus melalui pencarian Staff ID/nama. Pekerjaan dapat dibagi berdasarkan pemerataan quantity atau bergiliran per SO. Shift picker selalu diturunkan dari `schedule_description`. Sistem menampilkan guardrail:
 
 - picker aktif;
 - sudah check-in;
@@ -239,10 +241,10 @@ Row hanya `READY` bila:
 | Menu | Fungsi |
 |---|---|
 | Ringkasan | KPI inti dan visualisasi beban/throughput |
-| Assign Picker | rekomendasi, manual assignment, staging, review |
+| Assign Picker | filter multi-pilihan, rekomendasi, assign massal, staging, review |
 | Zona | beban, kapasitas, dan pemerataan zona |
-| Picker | roster, status, skill, target MP |
-| Supply Order | pencarian dan filter SO |
+| Picker | produktivitas, Top 10, on duty, roster, skill, dan target |
+| Supply Order | filter lengkap, pencarian SKU/produk/remark, dan detail SKU |
 | Checker | route checker dan progres |
 | Laporan | ekspor, audit, dan kualitas data |
 | Konfigurasi | konektor Superset, cookie, Wave/Drop, target |
@@ -318,6 +320,7 @@ Isi nilai berikut:
 | `SUPERSET_SO_SLICE_ID` | bootstrap | Slice ID SO |
 | `SUPERSET_STAFF_SLICE_ID` | bootstrap | Slice ID staff |
 | `SUPERSET_EXPORT_PATH_TEMPLATE` | bootstrap | pola endpoint export |
+| `SUPERSET_REFRESH_INTERVAL_MINUTES` | opsional | interval refresh otomatis, 1–60 menit |
 | `SUPERSET_COOKIE_ENCRYPTION_KEY` | bila simpan cookie via UI | random secret minimal 32 karakter |
 | `SUPERSET_SESSION_COOKIE` | opsional | alternatif cookie via secret env |
 | `SUPERSET_COOKIE_EXPIRES_AT` | opsional | waktu kedaluwarsa ISO 8601 |
@@ -375,7 +378,7 @@ Default:
 /api/v1/chart/{sliceId}/data/?format=csv&force=true
 ```
 
-Karena instalasi Superset dapat berbeda, path dibuat configurable. Token yang tersedia:
+Path ekspor memakai pola server berikut dan sengaja tidak ditampilkan di UI agar konfigurasi operator tetap sederhana. Token yang tersedia:
 
 | Token | Nilai |
 |---|---|
@@ -390,7 +393,7 @@ Contoh:
 /api/v1/chart/{sliceId}/data/?format=csv&force=true&from={from}&to={to}
 ```
 
-Bila endpoint default ditolak, buka DevTools → Network, lakukan export CSV secara normal, lalu salin **path dan query** request yang berhasil. Jangan menyalin host lain atau URL HTTP.
+Bila instalasi Superset memakai endpoint berbeda, ubah `SUPERSET_EXPORT_PATH_TEMPLATE` melalui environment deployment. Jangan memasukkan host lain atau URL HTTP.
 
 ### 3. Ambil cookie session
 
@@ -398,11 +401,10 @@ Bila endpoint default ditolak, buka DevTools → Network, lakukan export CSV sec
 2. buka DevTools → Network;
 3. pilih request export yang berhasil;
 4. salin nilai request header `Cookie`;
-5. catat waktu kedaluwarsa sesi;
-6. buka **Konfigurasi → Koneksi Superset**;
-7. masukkan base URL, Slice ID, path, cookie, dan waktu kedaluwarsa;
-8. simpan;
-9. klik **Uji & sync**.
+5. buka **Konfigurasi → Koneksi Superset**;
+6. masukkan Base URL, dua Slice ID, cookie, dan interval refresh;
+7. simpan;
+8. klik **Uji & sync sekarang**.
 
 Cookie tidak pernah dikirim kembali ke browser setelah disimpan. D1 hanya menyimpan ciphertext dan IV; key enkripsi berada di environment.
 
@@ -413,9 +415,8 @@ Cookie memang akan kedaluwarsa dan tidak dapat diperbarui otomatis secara aman t
 1. login ulang ke Superset;
 2. ambil cookie baru dari request export;
 3. ganti cookie pada halaman Konfigurasi;
-4. perbarui waktu kedaluwarsa;
-5. simpan dan jalankan sync;
-6. pastikan `last verified` dan jumlah row berubah.
+4. simpan dan jalankan sync;
+5. pastikan waktu sync dan jumlah baris berubah.
 
 Raw cookie tidak tampil pada log, response API, atau status UI.
 
@@ -542,6 +543,7 @@ Setiap URL deployment Sites adalah production URL. Gunakan akses private kecuali
 - SO dan tabel planning dipaginasi;
 - transformasi besar berjalan server-side;
 - dua export Superset diambil paralel;
+- Web Locks dan lease D1 mencegah sync bersamaan;
 - response dan route data memakai `no-store`;
 - host Superset di-allowlist;
 - hanya URL HTTPS dan same-origin command yang diterima;
@@ -613,13 +615,19 @@ Server preview lama masih mengunci folder build. Hentikan proses `wrangler dev`,
 - [ ] cookie tidak pernah tampil kembali setelah disimpan.
 - [ ] status cookie expired mudah dipahami.
 - [ ] Wave/Drop baru dapat ditulis tanpa perubahan kode.
+- [ ] tujuan baru dari data SO muncul otomatis pada antrean routing.
+- [ ] interval refresh 1–60 menit tampil di topbar setelah disimpan.
 - [ ] picker noneligible tidak direkomendasikan.
+- [ ] filter Assign Picker dapat memilih banyak nilai, termasuk jadwal dan remark.
+- [ ] assignment manual dapat membagi SO ke banyak picker berdasarkan Staff ID/nama.
 - [ ] assignment manual memeriksa enam guardrail.
 - [ ] override manual membutuhkan catatan.
 - [ ] split parsial diblokir.
 - [ ] satu SO menghasilkan satu picker final.
 - [ ] CSV WMS hanya memiliki tiga kolom.
 - [ ] checker dan laporan dapat dibuka.
+- [ ] Top 10 produktivitas dan nilai chart terbaca pada screenshot desktop.
+- [ ] detail Supply Order menampilkan daftar SKU.
 - [ ] Panduan dapat dinavigasi.
 - [ ] seluruh CSS/JS production mengembalikan HTTP 200.
 

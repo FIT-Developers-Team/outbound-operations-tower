@@ -20,6 +20,9 @@ type ConnectorRow = {
   so_slice_id: string;
   staff_slice_id: string;
   path_template: string;
+  refresh_interval_minutes: number;
+  sync_locked_until: string | null;
+  sync_lock_token: string | null;
   cookie_ciphertext: string | null;
   cookie_iv: string | null;
   cookie_expires_at: string | null;
@@ -46,6 +49,9 @@ export type StoredConnector = {
   soSliceId: string;
   staffSliceId: string;
   pathTemplate: string;
+  refreshIntervalMinutes: number;
+  syncLockedUntil: string | null;
+  syncLockToken: string | null;
   cookieCiphertext: string | null;
   cookieIv: string | null;
   cookieExpiresAt: string | null;
@@ -73,6 +79,9 @@ export async function ensureRuntimeSchema() {
         so_slice_id TEXT NOT NULL DEFAULT '',
         staff_slice_id TEXT NOT NULL DEFAULT '',
         path_template TEXT NOT NULL DEFAULT '${DEFAULT_PATH}',
+        refresh_interval_minutes INTEGER NOT NULL DEFAULT 5,
+        sync_locked_until TEXT,
+        sync_lock_token TEXT,
         cookie_ciphertext TEXT,
         cookie_iv TEXT,
         cookie_expires_at TEXT,
@@ -117,6 +126,29 @@ export async function ensureRuntimeSchema() {
       )
     `),
   ]);
+  const tableInfo = await db
+    .prepare("PRAGMA table_info(sync_connector)")
+    .all<{ name: string }>();
+  const columns = new Set(
+    (tableInfo.results ?? []).map((column) => column.name),
+  );
+  if (!columns.has("refresh_interval_minutes")) {
+    await db
+      .prepare(
+        "ALTER TABLE sync_connector ADD COLUMN refresh_interval_minutes INTEGER NOT NULL DEFAULT 5",
+      )
+      .run();
+  }
+  if (!columns.has("sync_locked_until")) {
+    await db
+      .prepare("ALTER TABLE sync_connector ADD COLUMN sync_locked_until TEXT")
+      .run();
+  }
+  if (!columns.has("sync_lock_token")) {
+    await db
+      .prepare("ALTER TABLE sync_connector ADD COLUMN sync_lock_token TEXT")
+      .run();
+  }
   return true;
 }
 
@@ -129,12 +161,21 @@ export async function getStoredConnector(): Promise<StoredConnector> {
     staffSliceId: process.env.SUPERSET_STAFF_SLICE_ID?.trim() ?? "",
     pathTemplate:
       process.env.SUPERSET_EXPORT_PATH_TEMPLATE?.trim() || DEFAULT_PATH,
+    refreshIntervalMinutes: Math.min(
+      60,
+      Math.max(
+        1,
+        Number(process.env.SUPERSET_REFRESH_INTERVAL_MINUTES) || 5,
+      ),
+    ),
   };
   if (!env.DB) {
     return {
       ...fromEnvironment,
       cookieCiphertext: null,
       cookieIv: null,
+      syncLockedUntil: null,
+      syncLockToken: null,
       cookieExpiresAt: process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() || null,
       cookieUpdatedAt: null,
       health:
@@ -151,6 +192,7 @@ export async function getStoredConnector(): Promise<StoredConnector> {
   await ensureRuntimeSchema();
   const row = await env.DB.prepare(
     `SELECT base_url, so_slice_id, staff_slice_id, path_template,
+            refresh_interval_minutes, sync_locked_until, sync_lock_token,
             cookie_ciphertext, cookie_iv, cookie_expires_at, cookie_updated_at,
             health, last_message, last_verified_at, updated_at
        FROM sync_connector WHERE id = ?1`,
@@ -162,6 +204,8 @@ export async function getStoredConnector(): Promise<StoredConnector> {
       ...fromEnvironment,
       cookieCiphertext: null,
       cookieIv: null,
+      syncLockedUntil: null,
+      syncLockToken: null,
       cookieExpiresAt: process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() || null,
       cookieUpdatedAt: null,
       health:
@@ -180,6 +224,10 @@ export async function getStoredConnector(): Promise<StoredConnector> {
     soSliceId: row.so_slice_id || fromEnvironment.soSliceId,
     staffSliceId: row.staff_slice_id || fromEnvironment.staffSliceId,
     pathTemplate: row.path_template || fromEnvironment.pathTemplate,
+    refreshIntervalMinutes:
+      row.refresh_interval_minutes || fromEnvironment.refreshIntervalMinutes,
+    syncLockedUntil: row.sync_locked_until,
+    syncLockToken: row.sync_lock_token,
     cookieCiphertext: row.cookie_ciphertext,
     cookieIv: row.cookie_iv,
     cookieExpiresAt:
@@ -203,14 +251,18 @@ export async function saveStoredConnector(
   await env.DB.prepare(`
     INSERT INTO sync_connector (
       id, base_url, so_slice_id, staff_slice_id, path_template,
-      cookie_ciphertext, cookie_iv, cookie_expires_at, cookie_updated_at,
+      refresh_interval_minutes, sync_locked_until, sync_lock_token, cookie_ciphertext,
+      cookie_iv, cookie_expires_at, cookie_updated_at,
       health, last_message, last_verified_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
     ON CONFLICT(id) DO UPDATE SET
       base_url = excluded.base_url,
       so_slice_id = excluded.so_slice_id,
       staff_slice_id = excluded.staff_slice_id,
       path_template = excluded.path_template,
+      refresh_interval_minutes = excluded.refresh_interval_minutes,
+      sync_locked_until = excluded.sync_locked_until,
+      sync_lock_token = excluded.sync_lock_token,
       cookie_ciphertext = excluded.cookie_ciphertext,
       cookie_iv = excluded.cookie_iv,
       cookie_expires_at = excluded.cookie_expires_at,
@@ -226,6 +278,9 @@ export async function saveStoredConnector(
       connector.soSliceId,
       connector.staffSliceId,
       connector.pathTemplate,
+      connector.refreshIntervalMinutes,
+      connector.syncLockedUntil,
+      connector.syncLockToken,
       connector.cookieCiphertext,
       connector.cookieIv,
       connector.cookieExpiresAt,
@@ -235,6 +290,48 @@ export async function saveStoredConnector(
       connector.lastVerifiedAt,
       connector.updatedAt,
     )
+    .run();
+}
+
+export async function acquireSyncLease() {
+  const env = await runtimeBindings();
+  if (!env.DB) return { acquired: true, token: "ephemeral" };
+  await ensureRuntimeSchema();
+  await env.DB.prepare(
+    `INSERT INTO sync_connector (id, updated_at)
+     VALUES (?1, ?2)
+     ON CONFLICT(id) DO NOTHING`,
+  )
+    .bind(CONNECTOR_ID, new Date().toISOString())
+    .run();
+  const token = crypto.randomUUID();
+  const now = new Date();
+  const lockedUntil = new Date(now.getTime() + 5 * 60_000).toISOString();
+  await env.DB.prepare(
+    `UPDATE sync_connector
+        SET sync_locked_until = ?1, sync_lock_token = ?2
+      WHERE id = ?3
+        AND (sync_locked_until IS NULL OR sync_locked_until <= ?4)`,
+  )
+    .bind(lockedUntil, token, CONNECTOR_ID, now.toISOString())
+    .run();
+  const row = await env.DB.prepare(
+    "SELECT sync_lock_token FROM sync_connector WHERE id = ?1",
+  )
+    .bind(CONNECTOR_ID)
+    .first<{ sync_lock_token: string | null }>();
+  return { acquired: row?.sync_lock_token === token, token };
+}
+
+export async function releaseSyncLease(token: string) {
+  const env = await runtimeBindings();
+  if (!env.DB || token === "ephemeral") return;
+  await env.DB.prepare(
+    `UPDATE sync_connector
+        SET sync_locked_until = NULL, sync_lock_token = NULL
+      WHERE id = ?1 AND sync_lock_token = ?2`,
+  )
+    .bind(CONNECTOR_ID, token)
     .run();
 }
 
@@ -317,6 +414,7 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
     soSliceId: connector.soSliceId,
     staffSliceId: connector.staffSliceId,
     pathTemplate: connector.pathTemplate,
+    refreshIntervalMinutes: connector.refreshIntervalMinutes,
     currentMonthOnly: true,
     cookiePresent: environmentCookie || Boolean(connector.cookieCiphertext),
     cookieSource: environmentCookie
@@ -447,15 +545,31 @@ export async function loadDatasetSnapshot(): Promise<{
   if (env.SNAPSHOTS) {
     const object = await env.SNAPSHOTS.get(key);
     if (object) {
+      const data = await object.json<DemoDataset>();
       return {
-        data: await object.json<DemoDataset>(),
+        data: {
+          ...data,
+          orders: data.orders.map((order) => ({
+            ...order,
+            remarks: order.remarks ?? [],
+            skuDetails: order.skuDetails ?? [],
+          })),
+        },
         syncedAt: row?.synced_at ?? new Date().toISOString(),
       };
     }
   }
   if (row?.fallback_payload) {
+    const data = JSON.parse(row.fallback_payload) as DemoDataset;
     return {
-      data: JSON.parse(row.fallback_payload) as DemoDataset,
+      data: {
+        ...data,
+        orders: data.orders.map((order) => ({
+          ...order,
+          remarks: order.remarks ?? [],
+          skuDetails: order.skuDetails ?? [],
+        })),
+      },
       syncedAt: row.synced_at,
     };
   }

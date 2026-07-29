@@ -54,7 +54,7 @@ type OutboundContextValue = {
     quiet?: boolean;
     forceSource?: boolean;
   }) => Promise<void>;
-  stageManual: (input: ManualAssignmentInput) => void;
+  stageManual: (inputs: ManualAssignmentInput[]) => void;
   setCheckerStatus: (routeId: string, status: CheckerState) => void;
   setProposals: (proposals: AssignmentProposal[]) => void;
   updatePicker: (picker: Picker) => void;
@@ -268,25 +268,27 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
           ? "warning"
           : "info",
         "Rekomendasi selesai",
-        `${planned.length} split dievaluasi. Review seluruh exception sebelum apply.`,
+        `${planned.length} split diperiksa. Tinjau kendala sebelum diterapkan.`,
       );
     },
     [data.orders, data.pickers, data.targetRules, selectedOrders, showNotice],
   );
 
   const stageManual = useCallback(
-    (input: ManualAssignmentInput) => {
-      const manual = buildManualAssignments(
-        data.orders,
-        data.pickers,
-        data.targetRules,
-        input,
+    (inputs: ManualAssignmentInput[]) => {
+      const manual = inputs.flatMap((input) =>
+        buildManualAssignments(
+          data.orders,
+          data.pickers,
+          data.targetRules,
+          input,
+        ),
       );
       if (!manual.length) {
         showNotice(
           "error",
-          "Assignment manual ditahan",
-          "Periksa picker, guardrail, atau alasan override.",
+        "Assign manual ditahan",
+        "Periksa picker, aturan, atau alasan pengecualian.",
         );
         return;
       }
@@ -297,9 +299,9 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       ]);
       setSelectedOrders(new Set(manual.map((proposal) => proposal.orderId)));
       showNotice(
-        input.allowOverride ? "warning" : "success",
-        "Assignment manual di-stage",
-        `${manual.length} split siap direview sebelum apply.`,
+        inputs.some((input) => input.allowOverride) ? "warning" : "success",
+        "Assign manual masuk staging",
+        `${manual.length} split untuk ${inputs.length} picker siap ditinjau.`,
       );
     },
     [data.orders, data.pickers, data.targetRules, showNotice],
@@ -318,7 +320,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       showNotice(
         "warning",
         "Tidak ada row siap",
-        "Selesaikan exception atau pilih batch lain sebelum apply.",
+        "Selesaikan kendala atau pilih batch lain sebelum diterapkan.",
       );
       return;
     }
@@ -381,7 +383,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     }));
     addAudit({
       actor: "Demo operator",
-      action: "Assignment batch applied in sample",
+      action: "Batch assignment diterapkan pada data contoh",
       detail: `${readySo.size} SO / ${valid.length} zone split assigned setelah seluruh bulk guardrail lulus.`,
       tone: "success",
     });

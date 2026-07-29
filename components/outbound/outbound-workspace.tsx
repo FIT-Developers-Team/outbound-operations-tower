@@ -112,13 +112,13 @@ function DataBanner({ message }: { message?: string }) {
   return (
     <div className={`data-banner ${live ? "is-live" : "is-sample"}`}>
       <span>
-        <i /> {live ? "Snapshot Superset" : "Mode sample"}
+        <i /> {live ? "Snapshot Superset" : "Data contoh"}
       </span>
       <p>
         {message ??
           (live
             ? "Data bulan berjalan disimpan sebagai snapshot cepat; cookie tidak pernah dikirim ke browser."
-            : "Sample menjaga fitur dapat diuji sebelum koneksi Superset disiapkan.")}
+            : "Data contoh tersedia agar semua fitur dapat diuji sebelum Superset terhubung.")}
       </p>
       <strong>
         {phase === "syncing"
@@ -260,6 +260,69 @@ function Pagination({
   );
 }
 
+function MultiChoice<T extends string>({
+  label,
+  options,
+  values,
+  onChange,
+  allLabel,
+}: {
+  label: string;
+  options: readonly T[];
+  values: T[];
+  onChange: (values: T[]) => void;
+  allLabel?: string;
+}) {
+  const summary =
+    values.length === 0
+      ? allLabel ?? `Semua ${label.toLowerCase()}`
+      : values.length === 1
+        ? values[0]
+        : `${values.length} dipilih`;
+  return (
+    <details className="multi-choice">
+      <summary>
+        <span>{label}</span>
+        <strong>{summary}</strong>
+      </summary>
+      <div className="multi-choice-popover">
+        <header>
+          <span>{label}</span>
+          <button
+            className="btn btn-sm btn-ghost"
+            disabled={!values.length}
+            onClick={(event) => {
+              event.preventDefault();
+              onChange([]);
+            }}
+            type="button"
+          >
+            Reset
+          </button>
+        </header>
+        <div>
+          {options.map((option) => (
+            <label className="check-label" key={option}>
+              <input
+                checked={values.includes(option)}
+                onChange={() =>
+                  onChange(
+                    values.includes(option)
+                      ? values.filter((item) => item !== option)
+                      : [...values, option],
+                  )
+                }
+                type="checkbox"
+              />
+              <span>{option}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function MetricStrip({
   metrics,
 }: {
@@ -304,10 +367,18 @@ function MetricStrip({
 function ThroughputChart({ data }: { data: DemoDataset }) {
   const points = data.hourly.slice(-12);
   const max = Math.max(...points.map((point) => point.requestQty), 1);
+  const compact = new Intl.NumberFormat("id-ID", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  });
   return (
     <div className="bar-chart" role="img" aria-label="Request dan selesai pick per jam">
       {points.map((point) => (
         <div className="bar-column" key={point.hour}>
+          <span className="bar-value num">
+            {compact.format(point.pickedQty)}
+            <small>/ {compact.format(point.requestQty)}</small>
+          </span>
           <span
             className="bar-pair"
             title={`${point.hour}:00 · ${number.format(point.pickedQty)} selesai dari ${number.format(point.requestQty)}`}
@@ -379,6 +450,7 @@ function StatusChart({ data }: { data: DemoDataset }) {
 }
 
 function PickerScatter({ data }: { data: DemoDataset }) {
+  const [selected, setSelected] = useState<Picker | null>(null);
   const points = data.pickers
     .filter((picker) => picker.role === "OUTBOUND_PICKER_STAFF")
     .slice(0, 80)
@@ -393,31 +465,67 @@ function PickerScatter({ data }: { data: DemoDataset }) {
     ...points.map((point) => point.productivity),
     1,
   );
+  const avgProductivity =
+    points.reduce((sum, point) => sum + point.productivity, 0) /
+    Math.max(1, points.length);
+  const avgLoad =
+    points.reduce((sum, point) => sum + point.load, 0) /
+    Math.max(1, points.length);
   return (
-    <div
-      className="scatter-chart"
-      role="img"
-      aria-label="Sebaran beban dan produktivitas picker"
-    >
-      <span className="scatter-axis axis-y">Produktivitas</span>
-      <span className="scatter-axis axis-x">Load target</span>
-      <i className="scatter-target" />
-      {points.map(({ picker, load, productivity }) => (
-        <button
-          aria-label={`${picker.name}: load ${Math.round(load)} persen, produktivitas ${Math.round(productivity)} unit per jam`}
-          className={`scatter-point ${isEligiblePicker(picker) ? "is-eligible" : "is-hold"}`}
-          key={picker.id}
-          style={{
-            left: `${Math.max(2, Math.min(96, (load / 140) * 100))}%`,
-            bottom: `${Math.max(3, Math.min(94, (productivity / maxProductivity) * 100))}%`,
-            width: `${8 + Math.min(10, picker.totalSo)}px`,
-            height: `${8 + Math.min(10, picker.totalSo)}px`,
-          }}
-          title={`${picker.name} · ${Math.round(load)}% load · ${Math.round(productivity)} unit/jam`}
-          type="button"
-        />
-      ))}
-    </div>
+    <>
+      <div className="chart-value-strip">
+        <span><small>Rata-rata beban</small><strong className="num">{avgLoad.toFixed(0)}%</strong></span>
+        <span><small>Rata-rata output</small><strong className="num">{avgProductivity.toFixed(0)} unit/jam</strong></span>
+        <span><small>Picker diplot</small><strong className="num">{points.length}</strong></span>
+      </div>
+      <div
+        className="scatter-chart"
+        role="img"
+        aria-label="Sebaran beban dan produktivitas picker"
+      >
+        <span className="scatter-axis axis-y">Unit/jam</span>
+        <span className="scatter-axis axis-x">Beban target</span>
+        <i className="scatter-target" />
+        {points.map(({ picker, load, productivity }) => (
+          <button
+            aria-label={`${picker.name}: beban ${Math.round(load)} persen, produktivitas ${Math.round(productivity)} unit per jam`}
+            className={`scatter-point ${isEligiblePicker(picker) ? "is-eligible" : "is-hold"}`}
+            key={picker.id}
+            onClick={() => setSelected(picker)}
+            style={{
+              left: `${Math.max(2, Math.min(96, (load / 140) * 100))}%`,
+              bottom: `${Math.max(3, Math.min(94, (productivity / maxProductivity) * 100))}%`,
+              width: `${8 + Math.min(10, picker.totalSo)}px`,
+              height: `${8 + Math.min(10, picker.totalSo)}px`,
+            }}
+            title={`${picker.name} · ${Math.round(load)}% beban · ${Math.round(productivity)} unit/jam`}
+            type="button"
+          />
+        ))}
+      </div>
+      {selected && (
+        <Modal
+          eyebrow="Detail titik picker"
+          onClose={() => setSelected(null)}
+          title={selected.name}
+        >
+          <div className="definition-grid">
+            <Definition label="Staff ID" value={selected.id} />
+            <Definition label="Jadwal" value={selected.scheduleDescription} />
+            <Definition label="Durasi aktif" value={`${selected.activeHours.toFixed(1)} jam`} />
+            <Definition label="Output" value={`${number.format(selected.pickedQty)} unit`} />
+            <Definition
+              label="Produktivitas"
+              value={`${Math.round(selected.pickedQty / Math.max(1, selected.activeHours))} unit/jam`}
+            />
+            <Definition
+              label="Beban target"
+              value={`${Math.round(pickerLoadPct(selected, data.targetRules))}%`}
+            />
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -465,7 +573,7 @@ function OverviewView({ data }: { data: DemoDataset }) {
       <PageHeader
         eyebrow="Kontrol shift"
         title="Ringkasan outbound"
-        description="Lihat beban, progres, tenaga siap, dan exception yang perlu ditindak."
+        description="Lihat beban, progres, picker siap, dan kendala utama."
         actions={
           <a className="btn btn-primary" href="/planning">
             Assign picker
@@ -494,7 +602,7 @@ function OverviewView({ data }: { data: DemoDataset }) {
         </Section>
         <Section eyebrow="Load vs output" title="Sebaran picker">
           <PickerScatter data={data} />
-          <p className="section-note">Garis vertikal menandai 100% target. Titik hijau memenuhi gate eligibility.</p>
+          <p className="section-note">Garis vertikal menandai 100% target. Titik hijau menunjukkan picker siap.</p>
         </Section>
         <Section eyebrow="Ukuran batch" title="Distribusi qty">
           <QuantityHistogram data={data} />
@@ -545,7 +653,7 @@ function ManualAssignmentModal({
   data: DemoDataset;
   orderIds: string[];
   onClose: () => void;
-  onStage: (input: ManualAssignmentInput) => void;
+  onStage: (inputs: ManualAssignmentInput[]) => void;
 }) {
   const initialOrders = data.orders.filter((order) =>
     orderIds.includes(order.id),
@@ -564,6 +672,13 @@ function ManualAssignmentModal({
         pickerScore(b) - pickerScore(a) || a.name.localeCompare(b.name, "id"),
     );
   const firstPicker = pickerOptions[0];
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [selectedPickerIds, setSelectedPickerIds] = useState<string[]>(
+    firstPicker ? [firstPicker.id] : [],
+  );
+  const [distribution, setDistribution] = useState<"BALANCED" | "ROUND_ROBIN">(
+    "BALANCED",
+  );
   const [input, setInput] = useState<ManualAssignmentInput>({
     orderIds,
     pickerId: firstPicker?.id ?? "",
@@ -577,20 +692,62 @@ function ManualAssignmentModal({
     allowOverride: false,
     note: "",
   });
-  const check = checkManualAssignment(
-    data.orders,
-    data.pickers,
-    data.targetRules,
-    input,
+  const visiblePickers = pickerOptions.filter((picker) =>
+    `${picker.id} ${picker.name} ${picker.scheduleDescription}`
+      .toLowerCase()
+      .includes(pickerQuery.trim().toLowerCase()),
   );
-  const selectedPicker = data.pickers.find(
-    (picker) => picker.id === input.pickerId,
+  const scopedOrders = input.lockWholeSo
+    ? data.orders.filter((order) =>
+        new Set(initialOrders.map((item) => item.soNumber)).has(order.soNumber),
+      )
+    : initialOrders;
+  const groups = input.lockWholeSo
+    ? [...new Set(scopedOrders.map((order) => order.soNumber))].map((soNumber) =>
+        scopedOrders.filter((order) => order.soNumber === soNumber),
+      )
+    : scopedOrders.map((order) => [order]);
+  const buckets = new Map(
+    selectedPickerIds.map((pickerId) => [
+      pickerId,
+      { orderIds: [] as string[], qty: 0 },
+    ]),
   );
+  groups
+    .sort(
+      (a, b) =>
+        b.reduce((sum, order) => sum + order.requestQty, 0) -
+        a.reduce((sum, order) => sum + order.requestQty, 0),
+    )
+    .forEach((group, index) => {
+      const pickerId =
+        distribution === "ROUND_ROBIN"
+          ? selectedPickerIds[index % Math.max(1, selectedPickerIds.length)]
+          : [...buckets.entries()].sort((a, b) => a[1].qty - b[1].qty)[0]?.[0];
+      const bucket = pickerId ? buckets.get(pickerId) : undefined;
+      if (!bucket) return;
+      bucket.orderIds.push(...group.map((order) => order.id));
+      bucket.qty += group.reduce((sum, order) => sum + order.requestQty, 0);
+    });
+  const batchInputs = [...buckets.entries()]
+    .filter(([, bucket]) => bucket.orderIds.length)
+    .map(([pickerId, bucket]) => ({
+      ...input,
+      pickerId,
+      orderIds: bucket.orderIds,
+    }));
+  const checks = batchInputs.map((item) =>
+    checkManualAssignment(data.orders, data.pickers, data.targetRules, item),
+  );
+  const violations = [...new Set(checks.flatMap((check) => check.violations))];
+  const canStage =
+    batchInputs.length > 0 && checks.every((check) => check.canStage);
+  const totalQty = checks.reduce((sum, check) => sum + check.totalQty, 0);
 
   return (
     <Modal
       wide
-      eyebrow="Kontrol assignment manual"
+      eyebrow="Assign manual"
       footer={
         <>
           <button className="btn btn-ghost" onClick={onClose} type="button">
@@ -598,39 +755,72 @@ function ManualAssignmentModal({
           </button>
           <button
             className="btn btn-primary"
-            disabled={!check.canStage}
+            disabled={!canStage}
             onClick={() => {
-              onStage(input);
+              onStage(batchInputs);
               onClose();
             }}
             type="button"
           >
-            Stage assignment
+            Stage {batchInputs.length} picker
           </button>
         </>
       }
       onClose={onClose}
-      title={`${check.orderIds.length || orderIds.length} split dipilih`}
+      title={`${scopedOrders.length} split dipilih`}
     >
       <div className="manual-layout">
         <div className="form-stack">
-          <label>
-            <span>Picker</span>
-            <select
-              className="input"
-              onChange={(event) =>
-                setInput({ ...input, pickerId: event.target.value })
-              }
-              value={input.pickerId}
-            >
-              {pickerOptions.map((picker) => (
-                <option key={picker.id} value={picker.id}>
-                  {picker.name} · {effectiveMpStatus(picker)} · {picker.shift} ·{" "}
-                  {Math.round(pickerLoadPct(picker, data.targetRules))}%
-                </option>
+          <div className="picker-multi-select">
+            <label>
+              <span>Cari dan pilih picker</span>
+              <input
+                className="input"
+                onChange={(event) => setPickerQuery(event.target.value)}
+                placeholder="Staff ID, nama, atau jadwal"
+                type="search"
+                value={pickerQuery}
+              />
+            </label>
+            <div className="picker-option-list">
+              {visiblePickers.slice(0, 60).map((picker) => (
+                <label className="picker-option" key={picker.id}>
+                  <input
+                    checked={selectedPickerIds.includes(picker.id)}
+                    onChange={() =>
+                      setSelectedPickerIds((current) =>
+                        current.includes(picker.id)
+                          ? current.filter((id) => id !== picker.id)
+                          : [...current, picker.id],
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>{picker.name}</strong>
+                    <small className="num">{picker.id} · {picker.scheduleDescription}</small>
+                  </span>
+                  <em>{Math.round(pickerLoadPct(picker, data.targetRules))}%</em>
+                </label>
               ))}
-            </select>
-          </label>
+            </div>
+            <small>{selectedPickerIds.length} picker dipilih. SO akan dibagi tanpa memecah grupnya.</small>
+          </div>
+          {selectedPickerIds.length > 1 && (
+            <label>
+              <span>Cara pembagian</span>
+              <select
+                className="input"
+                onChange={(event) =>
+                  setDistribution(event.target.value as typeof distribution)
+                }
+                value={distribution}
+              >
+                <option value="BALANCED">Seimbangkan qty</option>
+                <option value="ROUND_ROBIN">Bergiliran per SO</option>
+              </select>
+            </label>
+          )}
           <label className="check-label">
             <input
               checked={input.lockWholeSo}
@@ -645,7 +835,7 @@ function ManualAssignmentModal({
             {[
               ["requireActive", "Harus aktif"],
               ["requireCheckIn", "Harus check-in"],
-              ["requireRole", "Role picker"],
+              ["requireRole", "Harus picker"],
               ["requireShift", "Shift sama"],
               ["requireZone", "Skill zona cocok"],
               ["enforceCapacity", "Batas kapasitas"],
@@ -688,18 +878,29 @@ function ManualAssignmentModal({
 
         <aside className="validation-panel">
           <span className="eyebrow">Validasi langsung</span>
-          <strong className={check.canStage ? "text-success" : "text-warning"}>
-            {check.canStage ? "Dapat di-stage" : "Perlu diperbaiki"}
+          <strong className={canStage ? "text-success" : "text-warning"}>
+            {canStage ? "Siap di-stage" : "Perlu diperbaiki"}
           </strong>
           <dl>
-            <div><dt>Total qty</dt><dd className="num">{number.format(check.totalQty)}</dd></div>
-            <div><dt>Projected load</dt><dd className="num">{Math.round(check.projectedLoadPct)}%</dd></div>
-            <div><dt>Shift picker</dt><dd>{selectedPicker?.shift ?? "-"}</dd></div>
-            <div><dt>Skill zona</dt><dd>{selectedPicker?.zones.join(", ") || "Belum diatur"}</dd></div>
+            <div><dt>Total qty</dt><dd className="num">{number.format(totalQty)}</dd></div>
+            <div><dt>Picker</dt><dd className="num">{batchInputs.length}</dd></div>
+            <div><dt>Grup SO</dt><dd className="num">{groups.length}</dd></div>
+            <div><dt>Pembagian</dt><dd>{selectedPickerIds.length > 1 ? (distribution === "BALANCED" ? "Seimbang" : "Bergiliran") : "Satu picker"}</dd></div>
           </dl>
-          {check.violations.length ? (
+          <div className="batch-preview">
+            {batchInputs.map((item, index) => {
+              const picker = data.pickers.find((row) => row.id === item.pickerId);
+              return (
+                <div key={item.pickerId}>
+                  <span><strong>{picker?.name}</strong><small>{picker?.scheduleDescription}</small></span>
+                  <b className="num">{item.orderIds.length} split · {number.format(checks[index]?.totalQty ?? 0)}</b>
+                </div>
+              );
+            })}
+          </div>
+          {violations.length ? (
             <ul className="validation-list">
-              {check.violations.map((violation) => (
+              {violations.map((violation) => (
                 <li key={violation}>{violation}</li>
               ))}
             </ul>
@@ -729,14 +930,16 @@ function PlanningView({
   onOptimize: (filter: AssignmentFilter) => void;
   onApply: () => void;
   onDiscard: () => void;
-  onManual: (input: ManualAssignmentInput) => void;
+  onManual: (inputs: ManualAssignmentInput[]) => void;
 }) {
   const routing = dynamicRoutingOptions(data);
-  const [shift, setShift] = useState<ShiftCode | "ALL">("ALL");
-  const [mpStatus, setMpStatus] = useState<MpStatus | "ALL">("ALL");
-  const [zone, setZone] = useState("ALL");
-  const [wave, setWave] = useState("ALL");
-  const [drop, setDrop] = useState("ALL");
+  const [shifts, setShifts] = useState<ShiftCode[]>([]);
+  const [mpStatuses, setMpStatuses] = useState<MpStatus[]>([]);
+  const [zonesSelected, setZonesSelected] = useState<string[]>([]);
+  const [waves, setWaves] = useState<string[]>([]);
+  const [drops, setDrops] = useState<string[]>([]);
+  const [scheduleDescriptions, setScheduleDescriptions] = useState<string[]>([]);
+  const [remarks, setRemarks] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [orderDetail, setOrderDetail] = useState<
     (typeof data.orders)[number] | null
@@ -749,12 +952,25 @@ function PlanningView({
     () => [...new Set(data.orders.map((order) => order.zone))].sort(),
     [data.orders],
   );
+  const scheduleOptions = useMemo(
+    () =>
+      [...new Set(data.pickers.map((picker) => picker.scheduleDescription))]
+        .filter(Boolean)
+        .sort(),
+    [data.pickers],
+  );
+  const remarkOptions = useMemo(
+    () => [...new Set(data.orders.flatMap((order) => order.remarks ?? []))].sort(),
+    [data.orders],
+  );
   const filter: AssignmentFilter = {
-    shift,
-    mpStatuses: mpStatus === "ALL" ? [] : [mpStatus],
-    zones: zone === "ALL" ? [] : [zone],
-    waves: wave === "ALL" ? [] : [wave],
-    drops: drop === "ALL" ? [] : [drop],
+    shifts,
+    scheduleDescriptions,
+    mpStatuses,
+    zones: zonesSelected,
+    waves,
+    drops,
+    remarks,
   };
   const eligible = useMemo(
     () =>
@@ -765,12 +981,14 @@ function PlanningView({
             order.pickerId === null &&
             order.status === "NEW" &&
             order.mappingStatus === "MAPPED" &&
-            (shift === "ALL" || order.shift === shift) &&
-            (zone === "ALL" || order.zone === zone) &&
-            (wave === "ALL" || order.wave === wave) &&
-            (drop === "ALL" || order.drop === drop) &&
+            (!shifts.length || shifts.includes(order.shift)) &&
+            (!zonesSelected.length || zonesSelected.includes(order.zone)) &&
+            (!waves.length || waves.includes(order.wave)) &&
+            (!drops.length || drops.includes(order.drop)) &&
+            (!remarks.length ||
+              (order.remarks ?? []).some((remark) => remarks.includes(remark))) &&
             (!term ||
-              `${order.soNumber} ${order.destination} ${order.zone} ${order.pickingAreaNames.join(" ")}`
+              `${order.soNumber} ${order.destination} ${order.zone} ${order.pickingAreaNames.join(" ")} ${(order.remarks ?? []).join(" ")} ${(order.skuDetails ?? []).map((sku) => `${sku.skuNumber} ${sku.productName}`).join(" ")}`
                 .toLowerCase()
                 .includes(term))
           );
@@ -781,7 +999,7 @@ function PlanningView({
             compareRouteLabels(a.drop, b.drop) ||
             a.soNumber.localeCompare(b.soNumber),
         ),
-    [data.orders, drop, query, shift, wave, zone],
+    [data.orders, drops, query, remarks, shifts, waves, zonesSelected],
   );
   const visiblePage = Math.min(
     page,
@@ -818,11 +1036,13 @@ function PlanningView({
 
   function clearFilters() {
     setQuery("");
-    setShift("ALL");
-    setMpStatus("ALL");
-    setZone("ALL");
-    setWave("ALL");
-    setDrop("ALL");
+    setShifts([]);
+    setMpStatuses([]);
+    setZonesSelected([]);
+    setWaves([]);
+    setDrops([]);
+    setScheduleDescriptions([]);
+    setRemarks([]);
   }
 
   return (
@@ -830,7 +1050,7 @@ function PlanningView({
       <PageHeader
         eyebrow="Perencanaan"
         title="Assign picker"
-        description="Pilih SO, gunakan rekomendasi, atau atur manual dengan guardrail yang dapat diaudit."
+        description="Pilih SO, buat rekomendasi, atau bagi pekerjaan ke beberapa picker."
         actions={
           <div className="page-action-row">
             <button
@@ -851,7 +1071,7 @@ function PlanningView({
           </div>
         }
       />
-      <DataBanner message="Assignment tidak langsung diterapkan. Semua hasil masuk staging dan harus lulus validasi satu picker per SO." />
+      <DataBanner message="Hasil masuk staging lebih dulu. Satu SO tetap ditangani satu picker." />
 
       <div className="filter-bar assignment-filter">
         <label>
@@ -859,70 +1079,18 @@ function PlanningView({
           <input
             className="input"
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="SO, tujuan, zona, area"
+            placeholder="SO, tujuan, SKU, remark"
             type="search"
             value={query}
           />
         </label>
-        <label>
-          <span>Shift</span>
-          <select
-            className="input"
-            onChange={(event) =>
-              setShift(event.target.value as ShiftCode | "ALL")
-            }
-            value={shift}
-          >
-            <option value="ALL">Semua shift</option>
-            {shiftOptions.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>MP status</span>
-          <select
-            className="input"
-            onChange={(event) =>
-              setMpStatus(event.target.value as MpStatus | "ALL")
-            }
-            value={mpStatus}
-          >
-            <option value="ALL">Semua status</option>
-            {mpOptions.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Zona</span>
-          <select
-            className="input"
-            onChange={(event) => setZone(event.target.value)}
-            value={zone}
-          >
-            <option value="ALL">Semua zona</option>
-            {zones.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Wave</span>
-          <select
-            className="input"
-            onChange={(event) => setWave(event.target.value)}
-            value={wave}
-          >
-            <option value="ALL">Semua wave</option>
-            {routing.waves.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Drop</span>
-          <select
-            className="input"
-            onChange={(event) => setDrop(event.target.value)}
-            value={drop}
-          >
-            <option value="ALL">Semua drop</option>
-            {routing.drops.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
+        <MultiChoice label="Shift SO" onChange={setShifts} options={shiftOptions} values={shifts} />
+        <MultiChoice label="Jadwal picker" onChange={setScheduleDescriptions} options={scheduleOptions} values={scheduleDescriptions} />
+        <MultiChoice label="Status MP" onChange={setMpStatuses} options={mpOptions} values={mpStatuses} />
+        <MultiChoice label="Zona" onChange={setZonesSelected} options={zones} values={zonesSelected} />
+        <MultiChoice label="Wave" onChange={setWaves} options={routing.waves} values={waves} />
+        <MultiChoice label="Drop" onChange={setDrops} options={routing.drops} values={drops} />
+        <MultiChoice label="Remark" onChange={setRemarks} options={remarkOptions} values={remarks} />
         <button className="btn btn-ghost" onClick={clearFilters} type="button">
           Bersihkan
         </button>
@@ -931,13 +1099,13 @@ function PlanningView({
       <section className="metric-strip metric-strip-four">
         <KpiCard label="Kandidat" value={eligible.length} sub="NEW + mapping lengkap" tone="accent" />
         <KpiCard label="Dipilih" value={selected.size} sub={`${number.format(selectedQty)} qty`} tone="teal" />
-        <KpiCard label="Siap apply" value={readyRows.length} sub="Satu picker per SO" tone={readyRows.length ? "normal" : "muted"} />
-        <KpiCard label="Ditahan" value={blockedRows.length} sub="Perlu review" tone={blockedRows.length ? "critical" : "normal"} />
+        <KpiCard label="Siap diterapkan" value={readyRows.length} sub="Satu picker per SO" tone={readyRows.length ? "normal" : "muted"} />
+        <KpiCard label="Ditahan" value={blockedRows.length} sub="Perlu diperiksa" tone={blockedRows.length ? "critical" : "normal"} />
       </section>
 
       <Section
         eyebrow={`${eligible.length} kandidat SO × zona`}
-        title="Pool assignment"
+        title="Daftar SO siap assign"
         action={
           <button className="btn btn-sm" onClick={toggleAll} type="button">
             Pilih halaman
@@ -954,7 +1122,7 @@ function PlanningView({
                 <th>Zona</th>
                 <th>Routing</th>
                 <th className="numeric">Qty</th>
-                <th>Assignment</th>
+                <th>Picker</th>
                 <th>Aksi</th>
               </tr>
             </thead>
@@ -983,6 +1151,9 @@ function PlanningView({
                     <td>
                       <strong>{order.destination}</strong>
                       <small>{order.priority} · {order.skuCount} SKU</small>
+                      {(order.remarks ?? []).length > 0 && (
+                        <small className="text-accent">{order.remarks.join(", ")}</small>
+                      )}
                     </td>
                     <td>
                       <span className="chip">{order.zone}</span>
@@ -1001,7 +1172,7 @@ function PlanningView({
                           <strong>
                             {proposal.pickerName}{" "}
                             <span className={`badge badge-${proposal.mode === "MANUAL" ? "warning" : "info"}`}>
-                              {proposal.mode === "MANUAL" ? "MANUAL" : "SUGGESTED"}
+                              {proposal.mode === "MANUAL" ? "MANUAL" : "SARAN"}
                             </span>
                           </strong>
                           <small>{proposal.reason}</small>
@@ -1045,7 +1216,7 @@ function PlanningView({
       {proposals.length > 0 && (
         <Section
           eyebrow={`${readyRows.length} siap · ${blockedRows.length} ditahan`}
-          title="Review batch"
+          title="Periksa batch"
           action={
             <div className="section-actions">
               <button
@@ -1080,7 +1251,7 @@ function PlanningView({
             {bulkRows.map((row) => (
               <article key={row.soNumber}>
                 <span className={`badge badge-${row.ready ? "normal" : "critical"}`}>
-                  {row.ready ? "READY" : row.error_message}
+                  {row.ready ? "SIAP" : row.error_message}
                 </span>
                 <div>
                   <strong className="num">{row.soNumber}</strong>
@@ -1102,7 +1273,7 @@ function PlanningView({
           <div>
             <span className="eyebrow">Staging</span>
             <strong>{readyRows.length} SO siap diterapkan</strong>
-            <p>Baris yang ditahan tidak ikut apply.</p>
+            <p>Baris yang ditahan tidak ikut diterapkan.</p>
           </div>
           <div>
             <button className="btn btn-ghost" onClick={onDiscard} type="button">
@@ -1114,7 +1285,7 @@ function PlanningView({
               onClick={onApply}
               type="button"
             >
-              Apply yang siap
+              Terapkan yang siap
             </button>
           </div>
         </div>
@@ -1285,15 +1456,76 @@ function PeopleView({
     (picker) => picker.role === "OUTBOUND_PICKER_STAFF",
   ).length;
   const eligibleCount = data.pickers.filter(isEligiblePicker).length;
+  const productivityRows = useMemo(
+    () =>
+      sorted
+        .filter((picker) => picker.role === "OUTBOUND_PICKER_STAFF")
+        .map((picker) => {
+          const assignedOrders = data.orders.filter(
+            (order) => order.pickerId === picker.id,
+          );
+          const skuCount = assignedOrders.reduce(
+            (sum, order) => sum + order.skuCount,
+            0,
+          );
+          const soCount = new Set(
+            assignedOrders.map((order) => order.soNumber),
+          ).size;
+          return {
+            picker,
+            duration: picker.activeHours,
+            perHour: picker.pickedQty / Math.max(1, picker.activeHours),
+            perDay: picker.pickedQty,
+            skuCount,
+            soCount,
+            perSku: picker.pickedQty / Math.max(1, skuCount),
+            perSo: picker.pickedQty / Math.max(1, soCount),
+          };
+        })
+        .sort((a, b) => b.perHour - a.perHour),
+    [data.orders, sorted],
+  );
+  const topPickers = productivityRows.slice(0, 10);
+  const onDuty = data.pickers.filter(
+    (picker) =>
+      picker.role === "OUTBOUND_PICKER_STAFF" &&
+      picker.isActive &&
+      picker.checkedIn,
+  );
+  const onDutyByShift = shiftOptions.map((item) => ({
+    label: item,
+    count: onDuty.filter((picker) => picker.shift === item).length,
+  }));
+  const onDutyBySchedule = [
+    ...new Set(onDuty.map((picker) => picker.scheduleDescription)),
+  ]
+    .filter(Boolean)
+    .map((label) => ({
+      label,
+      count: onDuty.filter(
+        (picker) => picker.scheduleDescription === label,
+      ).length,
+    }))
+    .sort((a, b) => b.count - a.count);
+  const avgDuration =
+    productivityRows.reduce((sum, row) => sum + row.duration, 0) /
+    Math.max(1, productivityRows.length);
+  const avgPerHour =
+    productivityRows.reduce((sum, row) => sum + row.perHour, 0) /
+    Math.max(1, productivityRows.length);
+  const totalOutput = productivityRows.reduce(
+    (sum, row) => sum + row.perDay,
+    0,
+  );
 
   return (
     <>
       <PageHeader
         eyebrow="Manpower"
-        title="Kesiapan picker"
-        description="Atur skill zona, shift, status, dan target sebelum assignment."
+        title="Picker"
+        description="Pantau kesiapan, produktivitas, jadwal, dan target picker."
       />
-      <DataBanner message="Source staff tidak memiliki skill zona. Isi skill satu kali di sini; nilainya bertahan pada snapshot berikutnya." />
+      <DataBanner message="Skill zona diatur di sini dan tetap tersimpan saat data staff diperbarui." />
       <div className="filter-bar compact-filter">
         <label>
           <span>MP status</span>
@@ -1315,13 +1547,67 @@ function PeopleView({
         </label>
       </div>
 
-      <section className="metric-strip metric-strip-three">
-        <KpiCard label="Picker source" value={pickerCount} sub="OUTBOUND_PICKER_STAFF" tone="accent" />
-        <KpiCard label="Siap assign" value={eligibleCount} sub="Semua gate terpenuhi" tone="teal" />
-        <KpiCard label="Perlu dilengkapi" value={Math.max(0, pickerCount - eligibleCount)} sub="Check-in, jadwal, atau skill" tone={pickerCount - eligibleCount ? "warning" : "normal"} />
+      <section className="metric-strip metric-strip-four">
+        <KpiCard label="On duty" value={onDuty.length} sub={`${eligibleCount} siap assign`} tone="teal" />
+        <KpiCard label="Durasi rata-rata" value={`${avgDuration.toFixed(1)} jam`} sub={`${pickerCount} picker terdata`} tone="accent" />
+        <KpiCard label="Produktivitas" value={`${avgPerHour.toFixed(0)} unit/jam`} sub="Rata-rata picker" />
+        <KpiCard label="Output hari ini" value={number.format(totalOutput)} sub="Unit selesai pick" tone="normal" />
       </section>
 
-      <Section eyebrow="Batas beban per status" title="Target assignment">
+      <div className="dashboard-grid dashboard-grid-main productivity-grid">
+        <Section eyebrow="Kehadiran aktif" title="Picker on duty">
+          <div className="shift-productivity">
+            {onDutyByShift.map((item) => (
+              <article key={item.label}>
+                <span>{item.label}</span>
+                <strong className="num">{item.count}</strong>
+                <small>picker</small>
+              </article>
+            ))}
+          </div>
+          <div className="schedule-list">
+            {onDutyBySchedule.map((item) => (
+              <div key={item.label}>
+                <span>{item.label}</span>
+                <strong className="num">{item.count}</strong>
+              </div>
+            ))}
+          </div>
+        </Section>
+        <Section eyebrow="Peringkat output" title="Top 10 picker">
+          <div className="table-scroll">
+            <table className="tbl productivity-table">
+              <thead>
+                <tr>
+                  <th>Picker</th>
+                  <th className="numeric">Durasi</th>
+                  <th className="numeric">Unit/jam</th>
+                  <th className="numeric">Per hari</th>
+                  <th className="numeric">Per SKU</th>
+                  <th className="numeric">Per SO</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topPickers.map((row, index) => (
+                  <tr key={row.picker.id}>
+                    <th scope="row">
+                      <strong>{index + 1}. {row.picker.name}</strong>
+                      <small className="num">{row.picker.id} · {row.picker.scheduleDescription}</small>
+                    </th>
+                    <td className="numeric num">{row.duration.toFixed(1)}j</td>
+                    <td className="numeric num"><strong>{row.perHour.toFixed(0)}</strong></td>
+                    <td className="numeric num">{number.format(row.perDay)}</td>
+                    <td className="numeric num">{row.perSku.toFixed(1)}</td>
+                    <td className="numeric num">{row.perSo.toFixed(0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      </div>
+
+      <Section eyebrow="Batas beban per status" title="Target picker">
         <div className="target-grid">
           {data.targetRules.map((rule) => (
             <article className="target-card" key={rule.mpStatus}>
@@ -1362,7 +1648,7 @@ function PeopleView({
         </div>
       </Section>
 
-      <Section eyebrow={`${sorted.length} picker`} title="Roster picker">
+      <Section eyebrow={`${sorted.length} picker`} title="Daftar picker">
         <div className="table-scroll">
           <table className="tbl">
             <thead>
@@ -1394,7 +1680,7 @@ function PeopleView({
                     </td>
                     <td>
                       <span className={`badge badge-${valid ? "normal" : "critical"}`}>
-                        {valid ? "SIAP" : "HOLD"}
+                        {valid ? "SIAP" : "DITAHAN"}
                       </span>
                       <small>{picker.checkedIn ? "Check-in" : "Belum check-in"}</small>
                     </td>
@@ -1430,7 +1716,7 @@ function PeopleView({
         >
           <div className="form-grid">
             <label><span>Nama</span><input className="input" onChange={(event) => setDraft({ ...draft, name: event.target.value })} value={draft.name} /></label>
-            <label><span>Shift</span><select className="input" onChange={(event) => setDraft({ ...draft, shift: event.target.value as ShiftCode })} value={draft.shift}>{shiftOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
+            <label><span>Jadwal sumber</span><input className="input" readOnly value={draft.scheduleDescription} /><small>Shift {draft.shift} diturunkan otomatis dari schedule_description.</small></label>
             <label><span>Status override</span><select className="input" onChange={(event) => setDraft({ ...draft, mpStatusOverride: event.target.value ? event.target.value as MpStatus : null })} value={draft.mpStatusOverride ?? ""}><option value="">Ikuti tenure</option>{mpOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
             <label><span>Target override</span><input className="input num" min="0" onChange={(event) => setDraft({ ...draft, targetOverride: Number(event.target.value) > 0 ? Number(event.target.value) : null })} placeholder="Kosong = target status" type="number" value={draft.targetOverride ?? ""} /></label>
             <label className="form-span"><span>Skill zona (pisahkan koma)</span><input className="input" onChange={(event) => setDraft({ ...draft, zones: event.target.value.toUpperCase().split(",").map((item) => item.trim()).filter(Boolean) })} value={draft.zones.join(", ")} /></label>
@@ -1447,11 +1733,19 @@ function PeopleView({
 function OrdersView({ data }: { data: DemoDataset }) {
   const routing = dynamicRoutingOptions(data);
   const statusOptions = [...new Set(data.orders.map((order) => order.status))].sort();
+  const priorityOptions = [...new Set(data.orders.map((order) => order.priority))].sort();
+  const remarkOptions = [...new Set(data.orders.flatMap((order) => order.remarks ?? []))].sort();
   const [query, setQuery] = useState("");
-  const [wave, setWave] = useState("ALL");
-  const [drop, setDrop] = useState("ALL");
-  const [status, setStatus] = useState("ALL");
-  const [zone, setZone] = useState("ALL");
+  const [waves, setWaves] = useState<string[]>([]);
+  const [drops, setDrops] = useState<string[]>([]);
+  const [statuses, setStatuses] = useState<typeof statusOptions>([]);
+  const [zonesSelected, setZonesSelected] = useState<string[]>([]);
+  const [priorities, setPriorities] = useState<typeof priorityOptions>([]);
+  const [shifts, setShifts] = useState<ShiftCode[]>([]);
+  const [remarks, setRemarks] = useState<string[]>([]);
+  const [assignmentStates, setAssignmentStates] = useState<string[]>([]);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [detail, setDetail] = useState<(typeof data.orders)[number] | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = 50;
@@ -1460,15 +1754,26 @@ function OrdersView({ data }: { data: DemoDataset }) {
     () =>
       data.orders.filter((order) => {
         const term = query.trim().toLowerCase();
+        const createdDate = order.createdAt.slice(0, 10);
+        const haystack =
+          `${order.soNumber} ${order.wmsSoId} ${order.destination} ${order.zone} ${order.pickerId ?? ""} ${(order.remarks ?? []).join(" ")} ${(order.skuDetails ?? []).map((sku) => `${sku.skuNumber} ${sku.productId} ${sku.productName}`).join(" ")}`.toLowerCase();
         return (
-          (!term || `${order.soNumber} ${order.wmsSoId} ${order.destination} ${order.zone} ${order.pickerId ?? ""}`.toLowerCase().includes(term)) &&
-          (wave === "ALL" || order.wave === wave) &&
-          (drop === "ALL" || order.drop === drop) &&
-          (status === "ALL" || order.status === status) &&
-          (zone === "ALL" || order.zone === zone)
+          (!term || haystack.includes(term)) &&
+          (!waves.length || waves.includes(order.wave)) &&
+          (!drops.length || drops.includes(order.drop)) &&
+          (!statuses.length || statuses.includes(order.status)) &&
+          (!zonesSelected.length || zonesSelected.includes(order.zone)) &&
+          (!priorities.length || priorities.includes(order.priority)) &&
+          (!shifts.length || shifts.includes(order.shift)) &&
+          (!remarks.length ||
+            (order.remarks ?? []).some((remark) => remarks.includes(remark))) &&
+          (!assignmentStates.length ||
+            assignmentStates.includes(order.pickerId ? "Sudah assign" : "Belum assign")) &&
+          (!fromDate || createdDate >= fromDate) &&
+          (!toDate || createdDate <= toDate)
         );
       }),
-    [data.orders, drop, query, status, wave, zone],
+    [assignmentStates, data.orders, drops, fromDate, priorities, query, remarks, shifts, statuses, toDate, waves, zonesSelected],
   );
   const visiblePage = Math.min(page, Math.max(1, Math.ceil(filtered.length / pageSize)));
   const visibleOrders = filtered.slice((visiblePage - 1) * pageSize, visiblePage * pageSize);
@@ -1477,22 +1782,28 @@ function OrdersView({ data }: { data: DemoDataset }) {
       <PageHeader
         eyebrow="Penelusuran"
         title="Supply order"
-        description="Cari SO hingga zona, picking area, origin rack, routing, dan picker."
+        description="Cari SO, SKU, tujuan, routing, remark, dan picker."
         actions={<button className="btn" onClick={() => download(ordersToCsv(filtered), "CBT_SO_Zone_Split_Filtered.csv")} type="button">Unduh hasil</button>}
       />
       <DataBanner />
       <div className="filter-bar orders-filter">
-        <label><span>Cari</span><input className="input" onChange={(event) => setQuery(event.target.value)} placeholder="SO, tujuan, zona, picker" type="search" value={query} /></label>
-        <label><span>Wave</span><select className="input" onChange={(event) => setWave(event.target.value)} value={wave}><option value="ALL">Semua wave</option>{routing.waves.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label><span>Drop</span><select className="input" onChange={(event) => setDrop(event.target.value)} value={drop}><option value="ALL">Semua drop</option>{routing.drops.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label><span>Status</span><select className="input" onChange={(event) => setStatus(event.target.value)} value={status}><option value="ALL">Semua status</option>{statusOptions.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label><span>Zona</span><select className="input" onChange={(event) => setZone(event.target.value)} value={zone}><option value="ALL">Semua zona</option>{zones.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <button className="btn btn-ghost" onClick={() => { setQuery(""); setWave("ALL"); setDrop("ALL"); setStatus("ALL"); setZone("ALL"); }} type="button">Bersihkan</button>
+        <label><span>Cari</span><input className="input" onChange={(event) => setQuery(event.target.value)} placeholder="SO, SKU, produk, remark" type="search" value={query} /></label>
+        <MultiChoice label="Wave" onChange={setWaves} options={routing.waves} values={waves} />
+        <MultiChoice label="Drop" onChange={setDrops} options={routing.drops} values={drops} />
+        <MultiChoice label="Status" onChange={setStatuses} options={statusOptions} values={statuses} />
+        <MultiChoice label="Zona" onChange={setZonesSelected} options={zones} values={zonesSelected} />
+        <MultiChoice label="Prioritas" onChange={setPriorities} options={priorityOptions} values={priorities} />
+        <MultiChoice label="Shift" onChange={setShifts} options={shiftOptions} values={shifts} />
+        <MultiChoice label="Remark" onChange={setRemarks} options={remarkOptions} values={remarks} />
+        <MultiChoice label="Assignment" onChange={setAssignmentStates} options={["Sudah assign", "Belum assign"]} values={assignmentStates} />
+        <label><span>Dari tanggal</span><input className="input" onChange={(event) => setFromDate(event.target.value)} type="date" value={fromDate} /></label>
+        <label><span>Sampai tanggal</span><input className="input" onChange={(event) => setToDate(event.target.value)} type="date" value={toDate} /></label>
+        <button className="btn btn-ghost" onClick={() => { setQuery(""); setWaves([]); setDrops([]); setStatuses([]); setZonesSelected([]); setPriorities([]); setShifts([]); setRemarks([]); setAssignmentStates([]); setFromDate(""); setToDate(""); }} type="button">Reset filter</button>
       </div>
       <Section eyebrow={`${new Set(filtered.map((order) => order.soNumber)).size} SO · ${filtered.length} split`} title="Index SO × zona">
         <div className="table-scroll">
           <table className="tbl">
-            <thead><tr><th>Supply order</th><th>Status</th><th>Tujuan</th><th>Zona / area</th><th>Routing</th><th>Picker</th><th className="numeric">Request</th><th className="numeric">Sisa</th><th>Progres</th><th>Aksi</th></tr></thead>
+            <thead><tr><th>Supply order</th><th>Status</th><th>Tujuan</th><th>Zona / area</th><th>Routing</th><th>SKU / remark</th><th>Picker</th><th className="numeric">Request</th><th className="numeric">Sisa</th><th>Progres</th><th>Aksi</th></tr></thead>
             <tbody>
               {visibleOrders.map((order) => {
                 const pct = completionPct(order);
@@ -1503,6 +1814,7 @@ function OrdersView({ data }: { data: DemoDataset }) {
                     <td>{order.destination}</td>
                     <td><span className="chip">{order.zone}</span><small>{order.pickingAreaNames.join(", ")}</small></td>
                     <td><span className="chip chip-accent">{order.wave}</span> <span className="chip">{order.drop}</span></td>
+                    <td><strong>{order.skuCount} SKU</strong><small>{(order.remarks ?? []).join(", ") || "Tanpa remark"}</small></td>
                     <td className="num">{order.pickerId ?? <span className="muted">Belum ada</span>}</td>
                     <td className="numeric num">{number.format(order.requestQty)}</td>
                     <td className="numeric num"><strong>{number.format(remainingQty(order))}</strong></td>
@@ -1517,7 +1829,7 @@ function OrdersView({ data }: { data: DemoDataset }) {
         <Pagination onPage={setPage} page={visiblePage} pageSize={pageSize} total={filtered.length} />
       </Section>
       {detail && (
-        <Modal eyebrow="Detail supply order" onClose={() => setDetail(null)} title={detail.soNumber}>
+        <Modal wide eyebrow="Detail supply order" onClose={() => setDetail(null)} title={detail.soNumber}>
           <div className="definition-grid">
             <Definition label="Status" value={<OrderStatusBadge status={detail.status} />} />
             <Definition label="WMS so_id" value={detail.wmsSoId} />
@@ -1527,6 +1839,36 @@ function OrdersView({ data }: { data: DemoDataset }) {
             <Definition label="Wave / Drop" value={`${detail.wave} / ${detail.drop}`} />
             <Definition label="Qty / SKU / line" value={`${number.format(detail.requestQty)} / ${detail.skuCount} / ${detail.lineCount}`} />
             <Definition label="Picker" value={detail.pickerId ?? "Belum ada"} />
+            <Definition label="Remark" value={(detail.remarks ?? []).join(", ") || "Tanpa remark"} />
+          </div>
+          <div className="detail-subsection">
+            <span className="eyebrow">{(detail.skuDetails ?? []).length} SKU</span>
+            <h3>Detail SKU</h3>
+            <div className="table-scroll">
+              <table className="tbl">
+                <thead><tr><th>SKU</th><th>Produk</th><th className="numeric">Request</th><th className="numeric">Picked</th><th className="numeric">Sisa</th><th>Progres</th></tr></thead>
+                <tbody>
+                  {(detail.skuDetails ?? []).map((sku) => {
+                    const pct = sku.requestQty
+                      ? (sku.pickedQty / sku.requestQty) * 100
+                      : 0;
+                    return (
+                      <tr key={`${sku.skuNumber}-${sku.productId}`}>
+                        <th scope="row"><strong className="num">{sku.skuNumber || "-"}</strong><small className="num">{sku.productId || "-"}</small></th>
+                        <td>{sku.productName || "Nama produk tidak tersedia"}</td>
+                        <td className="numeric num">{number.format(sku.requestQty)}</td>
+                        <td className="numeric num">{number.format(sku.pickedQty)}</td>
+                        <td className="numeric num">{number.format(Math.max(0, sku.requestQty - sku.pickedQty))}</td>
+                        <td><span className="progress-cell"><ProgressBar label={`${sku.skuNumber} progress`} tone={toneForCompletion(pct) as "normal" | "warning" | "critical"} value={pct} /><b className="num">{pct.toFixed(0)}%</b></span></td>
+                      </tr>
+                    );
+                  })}
+                  {!(detail.skuDetails ?? []).length && (
+                    <tr><td colSpan={6}>Detail SKU belum tersedia pada snapshot lama. Jalankan sync untuk memperbarui.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </Modal>
       )}
@@ -1597,8 +1939,8 @@ function ReportsView({ data }: { data: DemoDataset }) {
       <section className="metric-strip metric-strip-four">
         <KpiCard label="Baris SO" value={number.format(data.sourceProfile.soRows)} sub={`${number.format(data.sourceProfile.distinctSo)} SO unik`} tone="accent" />
         <KpiCard label="SO multi-zona" value={data.sourceProfile.multiZoneSo} sub="Dipecah per zona" tone="warning" />
-        <KpiCard label="Picker source" value={`${data.sourceProfile.eligiblePickers}/${data.sourceProfile.pickerRows}`} sub="Aktif + check-in + jadwal" tone="teal" />
-        <KpiCard label="Integritas" value={`${quality.integrityPct.toFixed(1)}%`} sub={`${quality.issueCount} issue`} tone={quality.issueCount ? "warning" : "normal"} />
+        <KpiCard label="Picker valid" value={`${data.sourceProfile.eligiblePickers}/${data.sourceProfile.pickerRows}`} sub="Aktif + check-in + jadwal" tone="teal" />
+        <KpiCard label="Integritas" value={`${quality.integrityPct.toFixed(1)}%`} sub={`${quality.issueCount} masalah`} tone={quality.issueCount ? "warning" : "normal"} />
       </section>
       <div className="dashboard-grid dashboard-grid-main">
         <Section eyebrow="Temuan otomatis" title="Kualitas sumber">
@@ -1616,12 +1958,12 @@ function ReportsView({ data }: { data: DemoDataset }) {
         </Section>
       </div>
       <div className="dashboard-grid dashboard-grid-main">
-        <Section eyebrow="Metode" title="Guardrail assignment">
+        <Section eyebrow="Metode" title="Aturan assignment">
           <ol className="quality-list">
             <li><strong>Status</strong><span>Hanya NEW dan picker kosong yang masuk pool.</span></li>
-            <li><strong>Picker</strong><span>Aktif, check-in, role, shift, skill zona, dan kapasitas.</span></li>
+            <li><strong>Picker</strong><span>Aktif, check-in, jadwal, zona, dan kapasitas.</span></li>
             <li><strong>SO</strong><span>Semua split dalam satu SO memakai satu staff_id.</span></li>
-            <li><strong>Override</strong><span>Assignment manual di luar guardrail wajib memiliki alasan.</span></li>
+            <li><strong>Pengecualian</strong><span>Assign manual di luar aturan wajib memiliki alasan.</span></li>
           </ol>
         </Section>
         <Section eyebrow="Operator dan sistem" title="Audit terbaru">
@@ -1646,9 +1988,8 @@ function ConnectorSettings() {
     baseUrl: "",
     soSliceId: "",
     staffSliceId: "",
-    pathTemplate: "/api/v1/chart/{sliceId}/data/?format=csv&force=true",
     cookie: "",
-    cookieExpiresAt: "",
+    refreshIntervalMinutes: 5,
   });
   const [feedback, setFeedback] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1679,8 +2020,9 @@ function ConnectorSettings() {
           baseUrl: payload.config?.baseUrl ?? "",
           soSliceId: payload.config?.soSliceId ?? "",
           staffSliceId: payload.config?.staffSliceId ?? "",
-          pathTemplate: payload.config?.pathTemplate ?? current.pathTemplate,
-          cookieExpiresAt: payload.config?.cookieExpiresAt?.slice(0, 16) ?? "",
+          refreshIntervalMinutes:
+            payload.config?.refreshIntervalMinutes ??
+            current.refreshIntervalMinutes,
         }));
       })
       .catch((caught) => {
@@ -1715,7 +2057,12 @@ function ConnectorSettings() {
       }
       setConfig(payload.config);
       setForm((current) => ({ ...current, cookie: "" }));
-      setFeedback("Konfigurasi tersimpan. Jalankan sync untuk menguji sesi.");
+      window.dispatchEvent(
+        new CustomEvent("outbound-refresh-interval", {
+          detail: payload.config.refreshIntervalMinutes,
+        }),
+      );
+      setFeedback("Koneksi tersimpan. Jalankan sync untuk menguji sesi.");
     } catch (caught) {
       setFeedback(caught instanceof Error ? caught.message : "Gagal menyimpan.");
     } finally {
@@ -1737,12 +2084,11 @@ function ConnectorSettings() {
         <div className="form-stack">
           <label><span>Base URL Superset</span><input className="input" onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://superset.company.com" value={form.baseUrl} /></label>
           <div className="form-grid">
-            <label><span>Slice ID · SO</span><input className="input num" onChange={(event) => setForm({ ...form, soSliceId: event.target.value })} value={form.soSliceId} /></label>
-            <label><span>Slice ID · Staff</span><input className="input num" onChange={(event) => setForm({ ...form, staffSliceId: event.target.value })} value={form.staffSliceId} /></label>
+            <label><span>Slice ID SO</span><input className="input num" onChange={(event) => setForm({ ...form, soSliceId: event.target.value })} value={form.soSliceId} /></label>
+            <label><span>Slice ID staff</span><input className="input num" onChange={(event) => setForm({ ...form, staffSliceId: event.target.value })} value={form.staffSliceId} /></label>
           </div>
-          <label><span>Path export</span><input className="input num" onChange={(event) => setForm({ ...form, pathTemplate: event.target.value })} value={form.pathTemplate} /><small>Token: {"{sliceId}"}, {"{from}"}, {"{to}"}, {"{month}"}</small></label>
-          <label><span>Cookie baru</span><textarea autoComplete="off" className="input num" onChange={(event) => setForm({ ...form, cookie: event.target.value })} placeholder={config?.cookiePresent ? "Kosongkan untuk mempertahankan cookie tersimpan" : "Tempel nilai header Cookie dari request export"} rows={3} value={form.cookie} /></label>
-          <label><span>Kedaluwarsa cookie (opsional)</span><input className="input" onChange={(event) => setForm({ ...form, cookieExpiresAt: event.target.value })} type="datetime-local" value={form.cookieExpiresAt} /></label>
+          <label><span>Cookie Superset</span><textarea autoComplete="off" className="input num" onChange={(event) => setForm({ ...form, cookie: event.target.value })} placeholder={config?.cookiePresent ? "Kosongkan bila cookie belum berubah" : "Tempel nilai header Cookie"} rows={3} value={form.cookie} /><small>Cookie dienkripsi dan tidak pernah ditampilkan kembali.</small></label>
+          <label><span>Refresh otomatis</span><select className="input" onChange={(event) => setForm({ ...form, refreshIntervalMinutes: Number(event.target.value) })} value={form.refreshIntervalMinutes}>{[1, 2, 3, 5, 10, 15, 30, 60].map((minute) => <option key={minute} value={minute}>Setiap {minute} menit</option>)}</select></label>
           <div className="page-action-row">
             <button className="btn" disabled={saving} onClick={() => void save()} type="button">{saving ? "Menyimpan…" : "Simpan koneksi"}</button>
             <button className="btn btn-primary" disabled={phase === "syncing"} onClick={() => void refresh({ forceSource: true })} type="button">{phase === "syncing" ? "Menyinkronkan…" : "Uji & sync sekarang"}</button>
@@ -1750,15 +2096,16 @@ function ConnectorSettings() {
           {feedback && <p className="section-note">{feedback}</p>}
         </div>
         <aside className="connection-summary">
-          <span className="eyebrow">Keamanan sesi</span>
+          <span className="eyebrow">Status koneksi</span>
           <dl>
             <div><dt>Cookie</dt><dd>{config?.cookiePresent ? `Tersedia · ${config.cookieSource}` : "Belum ada"}</dd></div>
             <div><dt>Enkripsi</dt><dd>{config?.encryptionReady ? "AES-GCM siap" : "Secret belum diatur"}</dd></div>
             <div><dt>Terakhir diperbarui</dt><dd>{config?.cookieUpdatedAt ? new Date(config.cookieUpdatedAt).toLocaleString("id-ID") : "-"}</dd></div>
             <div><dt>Terakhir sync</dt><dd>{config?.lastRunAt ? new Date(config.lastRunAt).toLocaleString("id-ID") : "-"}</dd></div>
+            <div><dt>Refresh</dt><dd>Setiap {config?.refreshIntervalMinutes ?? form.refreshIntervalMinutes} menit</dd></div>
             <div><dt>Hasil</dt><dd>{config?.lastMessage ?? "-"}</dd></div>
           </dl>
-          <p>Cookie tidak pernah dikirim kembali ke browser. Saat sesi ditolak atau diarahkan ke login, status berubah menjadi EXPIRED.</p>
+          <p>Sync mengambil dua slice secara paralel, menyimpan snapshot cepat, dan mencegah proses ganda antar-tab. Ganti cookie hanya saat sesi Superset berakhir.</p>
         </aside>
       </div>
     </Section>
@@ -1781,12 +2128,24 @@ function SettingsView({
         .sort((a, b) => a.code.localeCompare(b.code)),
     [data.orders],
   );
+  const effectiveMonth = data.sourceProfile.sourceDate.slice(0, 7);
+  const configuredDestinations = new Set(
+    data.destinationRules
+      .filter((rule) => rule.active && rule.effectiveMonth === effectiveMonth)
+      .map((rule) => rule.destinationCode),
+  );
+  const destinationsNeedingRules = destinations.filter(
+    (destination) => !configuredDestinations.has(destination.code),
+  );
 
-  function createRule() {
-    const destination = destinations[0] ?? { code: "", name: "" };
+  function createRule(selectedDestination?: { code: string; name: string }) {
+    const destination = selectedDestination ??
+      destinationsNeedingRules[0] ??
+      destinations[0] ??
+      { code: "", name: "" };
     setDraft({
       id: `DEST-${crypto.randomUUID()}`,
-      effectiveMonth: data.sourceProfile.sourceDate.slice(0, 7),
+      effectiveMonth,
       destinationCode: destination.code,
       destinationName: destination.name,
       wave: routing.waves[0] ?? "",
@@ -1801,14 +2160,39 @@ function SettingsView({
       <PageHeader
         eyebrow="Data dan aturan"
         title="Konfigurasi"
-        description="Kelola koneksi Superset, cookie, Slice ID, serta routing Wave/Drop yang dinamis."
+        description="Atur koneksi data dan routing tujuan."
       />
       <ConnectorSettings />
       <Section
         eyebrow="Berlaku per bulan"
         title="Routing tujuan"
-        action={<button className="btn btn-primary" onClick={createRule} type="button">Tambah mapping</button>}
+        action={<button className="btn btn-primary" onClick={() => createRule()} type="button">Tambah mapping</button>}
       >
+        <div className="routing-discovery">
+          <div>
+            <span className="eyebrow">Otomatis dari data SO</span>
+            <strong>{destinations.length} tujuan ditemukan</strong>
+            <p>Tujuan baru langsung muncul di sini. Wave dan Drop tetap dapat diisi bebas untuk tiap bulan.</p>
+          </div>
+          <span className={`badge badge-${destinationsNeedingRules.length ? "warning" : "normal"}`}>
+            {destinationsNeedingRules.length} perlu mapping
+          </span>
+        </div>
+        {destinationsNeedingRules.length > 0 && (
+          <div className="routing-queue" aria-label="Tujuan yang belum memiliki mapping">
+            {destinationsNeedingRules.slice(0, 8).map((destination) => (
+              <button
+                className="routing-queue-item"
+                key={destination.code}
+                onClick={() => createRule(destination)}
+                type="button"
+              >
+                <span><strong>{destination.name}</strong><small className="num">{destination.code}</small></span>
+                <b>Atur</b>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="config-summary">
           <span><strong>{data.destinationRules.length}</strong> mapping</span>
           <span><strong>{routing.waves.length}</strong> wave unik</span>
@@ -1866,19 +2250,19 @@ function SettingsView({
 const guideSteps = [
   {
     title: "Siapkan koneksi",
-    summary: "Isi Base URL, dua Slice ID, path export, cookie, dan allowlist host.",
-    detail: "Ambil request export CSV dari Network browser Superset. Salin hanya Cookie header dan Slice ID; jangan menaruh cookie di source code.",
-    check: "Status koneksi menjadi READY.",
+    summary: "Isi Base URL, Slice ID SO, Slice ID staff, cookie, dan interval refresh.",
+    detail: "Ambil cookie dari request ekspor CSV di Network browser. Cookie disimpan terenkripsi dan tidak pernah ditampilkan kembali.",
+    check: "Status koneksi menunjukkan SIAP.",
   },
   {
     title: "Sync bulan berjalan",
     summary: "Klik Sync sekarang. Server mengambil SO dan staff secara paralel.",
     detail: "Filter bulan diterapkan dua kali: token tanggal pada URL upstream dan filter defensif pada transformasi server.",
-    check: "Status menjadi CONNECTED dan waktu sync diperbarui.",
+    check: "Status terhubung dan waktu sync diperbarui.",
   },
   {
     title: "Periksa kualitas",
-    summary: "Buka Laporan untuk memeriksa grain, null, routing, dan eligibility.",
+    summary: "Buka Laporan untuk memeriksa struktur, nilai kosong, routing, dan kesiapan.",
     detail: "SO diagregasi pada grain SO × picking zone. Picked qty hanya dianggap selesai jika picking_end_at terisi.",
     check: "Jumlah SO unik dan split dapat direkonsiliasi.",
   },
@@ -1891,14 +2275,14 @@ const guideSteps = [
   {
     title: "Siapkan picker",
     summary: "Lengkapi skill zona, shift, target, dan override bila diperlukan.",
-    detail: "Data Superset tidak membawa skill zona, sehingga profil operasional disimpan pada snapshot dan dipertahankan setelah sync.",
+    detail: "Data Superset tidak membawa skill zona. Profil operasional disimpan di aplikasi dan tetap ada setelah sync.",
     check: "Picker berstatus SIAP pada halaman Picker.",
   },
   {
     title: "Assign dan review",
-    summary: "Pilih rekomendasi atau assignment manual, lalu review staging.",
-    detail: "Manual assignment tetap memeriksa active, check-in, role, shift, zona, kapasitas, dan konsistensi satu picker per SO.",
-    check: "Batch WMS berstatus READY sebelum apply.",
+    summary: "Pilih rekomendasi atau assign manual, lalu periksa staging.",
+    detail: "Assign manual tetap memeriksa status aktif, check-in, jadwal, zona, kapasitas, dan satu picker per SO.",
+    check: "Batch WMS berstatus SIAP sebelum diterapkan.",
   },
 ];
 
@@ -1910,7 +2294,7 @@ function GuideView() {
       <PageHeader
         eyebrow="Panduan operasional"
         title="Dari Superset ke assignment"
-        description="Alur aman dan singkat untuk menyiapkan data, memvalidasi, lalu mengeksekusi assignment."
+        description="Langkah singkat untuk menyiapkan data, memeriksa, lalu menjalankan assignment."
       />
       <Section eyebrow="Infografik interaktif" title="Alur kerja">
         <div className="guide-flow" role="tablist" aria-label="Tahapan penggunaan">
@@ -1943,7 +2327,7 @@ function GuideView() {
         </article>
       </Section>
       <div className="dashboard-grid dashboard-grid-three">
-        <Section eyebrow="Cookie expired" title="Pulihkan sesi">
+        <Section eyebrow="Cookie kedaluwarsa" title="Pulihkan sesi">
           <ol className="quality-list compact-list">
             <li><strong>01</strong><span>Buka Superset dan login ulang.</span></li>
             <li><strong>02</strong><span>Unduh CSV dari slice yang sama.</span></li>
@@ -1951,10 +2335,10 @@ function GuideView() {
             <li><strong>04</strong><span>Simpan lalu Uji & sync.</span></li>
           </ol>
         </Section>
-        <Section eyebrow="Assignment manual" title="Kapan dipakai">
+        <Section eyebrow="Assign manual" title="Kapan dipakai">
           <p className="guide-copy">Gunakan saat TL perlu mempertahankan satu picker, memindahkan prioritas, atau menutup gap skill. Aktifkan override hanya jika pelanggaran operasional telah dipahami dan tulis alasan yang spesifik.</p>
         </Section>
-        <Section eyebrow="Troubleshooting" title="Tiga pemeriksaan cepat">
+        <Section eyebrow="Pemecahan masalah" title="Tiga pemeriksaan cepat">
           <ol className="quality-list compact-list">
             <li><strong>403</strong><span>Cookie atau permission slice ditolak.</span></li>
             <li><strong>HTML</strong><span>Request diarahkan ke halaman login.</span></li>

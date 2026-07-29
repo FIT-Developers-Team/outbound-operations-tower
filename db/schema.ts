@@ -8,6 +8,11 @@ export const syncConnector = sqliteTable("sync_connector", {
   pathTemplate: text("path_template")
     .notNull()
     .default("/api/v1/chart/{sliceId}/data/?format=csv&force=true"),
+  refreshIntervalMinutes: integer("refresh_interval_minutes")
+    .notNull()
+    .default(5),
+  syncLockedUntil: text("sync_locked_until"),
+  syncLockToken: text("sync_lock_token"),
   cookieCiphertext: text("cookie_ciphertext"),
   cookieIv: text("cookie_iv"),
   cookieExpiresAt: text("cookie_expires_at"),

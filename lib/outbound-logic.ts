@@ -158,6 +158,32 @@ export function splitSupplyOrderLines(
     const levels = racks
       .map((rack) => rack.match(/-(L\d+)-/i)?.[1]?.toUpperCase())
       .filter((value): value is string => Boolean(value));
+    const skuMap = new Map<
+      string,
+      {
+        skuNumber: string;
+        productId: string;
+        productName: string;
+        requestQty: number;
+        pickedQty: number;
+        lineCount: number;
+      }
+    >();
+    rows.forEach((row) => {
+      const key = row.skuNumber || row.productId;
+      const current = skuMap.get(key) ?? {
+        skuNumber: row.skuNumber,
+        productId: row.productId,
+        productName: row.productName,
+        requestQty: 0,
+        pickedQty: 0,
+        lineCount: 0,
+      };
+      current.requestQty += row.requestQty;
+      current.pickedQty += row.pickingEndAt ? row.requestQty : 0;
+      current.lineCount += 1;
+      skuMap.set(key, current);
+    });
 
     return {
       id,
@@ -173,12 +199,16 @@ export function splitSupplyOrderLines(
       mappingStatus: rule ? "MAPPED" : "UNMAPPED",
       status: first.status,
       priority: first.priority,
+      remarks: [...new Set(rows.map((row) => row.remarks).filter(Boolean))].sort(),
       requestQty: rows.reduce((sum, row) => sum + row.requestQty, 0),
       pickedQty: rows.reduce(
         (sum, row) => sum + (row.pickingEndAt ? row.requestQty : 0),
         0,
       ),
       skuCount: new Set(rows.map((row) => row.skuNumber)).size,
+      skuDetails: [...skuMap.values()].sort(
+        (a, b) => b.requestQty - a.requestQty || a.skuNumber.localeCompare(b.skuNumber),
+      ),
       lineCount: rows.length,
       rackLevel: [...new Set(levels)].join(", ") || "-",
       pickerId:
@@ -333,10 +363,12 @@ export function pickerLoadPct(picker: Picker, targetRules: TargetRule[] = []) {
 function passesOrderFilters(order: SupplyOrder, filter?: AssignmentFilter) {
   if (!filter) return true;
   return (
-    (filter.shift === "ALL" || order.shift === filter.shift) &&
+    (!filter.shifts.length || filter.shifts.includes(order.shift)) &&
     (!filter.zones.length || filter.zones.includes(order.zone)) &&
     (!filter.waves.length || filter.waves.includes(order.wave)) &&
-    (!filter.drops.length || filter.drops.includes(order.drop))
+    (!filter.drops.length || filter.drops.includes(order.drop)) &&
+    (!filter.remarks.length ||
+      order.remarks.some((remark) => filter.remarks.includes(remark)))
   );
 }
 
@@ -377,6 +409,8 @@ export function proposeAssignments(
           isEligiblePicker(picker) &&
           picker.shift === order.shift &&
           picker.zones.includes(order.zone) &&
+          (!filter?.scheduleDescriptions.length ||
+            filter.scheduleDescriptions.includes(picker.scheduleDescription)) &&
           (!filter?.mpStatuses.length || filter.mpStatuses.includes(status))
         );
       })
@@ -782,6 +816,9 @@ export function ordersToCsv(orders: SupplyOrder[]) {
     "shift",
     "line_count",
     "sku_count",
+    "remarks",
+    "sku_numbers",
+    "product_names",
     "deadline",
   ];
   const rows = orders.map((order) =>
@@ -801,6 +838,9 @@ export function ordersToCsv(orders: SupplyOrder[]) {
       order.shift,
       order.lineCount,
       order.skuCount,
+      (order.remarks ?? []).join(" | "),
+      (order.skuDetails ?? []).map((sku) => sku.skuNumber).join(" | "),
+      (order.skuDetails ?? []).map((sku) => sku.productName).join(" | "),
       order.deadline,
     ]
       .map(csvEscape)

@@ -9,6 +9,8 @@ import {
   deriveMpStatus,
   isEligiblePicker,
   minutesUntil,
+  proposeAssignments,
+  splitSupplyOrderLines,
 } from "../lib/outbound-logic.ts";
 
 function order(overrides = {}) {
@@ -30,6 +32,17 @@ function order(overrides = {}) {
     pickedQty: 0,
     skuCount: 1,
     lineCount: 1,
+    remarks: ["PRIORITAS"],
+    skuDetails: [
+      {
+        skuNumber: "SKU-1",
+        productId: "PROD-1",
+        productName: "Produk Satu",
+        requestQty: 100,
+        pickedQty: 0,
+        lineCount: 1,
+      },
+    ],
     rackLevel: "L1",
     pickerId: null,
     shift: "PAGI",
@@ -238,4 +251,84 @@ test("manual assignment locks all SO splits and requires a reason for override",
     },
   );
   assert.equal(overridden.canStage, true);
+});
+
+test("SO split keeps remarks and aggregates SKU details", () => {
+  const lines = [
+    {
+      soDate: "2026-07-28",
+      createdAt: "2026-07-28T05:00:00+07:00",
+      soNumber: "SO-1",
+      originId: "WH-1",
+      originLocationName: "Warehouse",
+      destination: "CBT Jakarta",
+      pickingAreaName: "MZA1",
+      originRackName: "WH-MZA1-L1-01",
+      productId: "PROD-1",
+      productName: "Produk Satu",
+      skuNumber: "SKU-1",
+      status: "NEW",
+      priority: "High",
+      requestQty: 60,
+      pickingStaffId: null,
+      pickerName: null,
+      pickingStartAt: null,
+      pickingEndAt: "2026-07-28T06:00:00+07:00",
+      remarks: "EXPRESS",
+    },
+    {
+      soDate: "2026-07-28",
+      createdAt: "2026-07-28T05:00:00+07:00",
+      soNumber: "SO-1",
+      originId: "WH-1",
+      originLocationName: "Warehouse",
+      destination: "CBT Jakarta",
+      pickingAreaName: "MZA1",
+      originRackName: "WH-MZA1-L1-02",
+      productId: "PROD-1",
+      productName: "Produk Satu",
+      skuNumber: "SKU-1",
+      status: "NEW",
+      priority: "High",
+      requestQty: 40,
+      pickingStaffId: null,
+      pickerName: null,
+      pickingStartAt: null,
+      pickingEndAt: null,
+      remarks: "EXPRESS",
+    },
+  ];
+  const result = splitSupplyOrderLines(lines, []);
+  assert.equal(result.length, 1);
+  assert.deepEqual(result[0].remarks, ["EXPRESS"]);
+  assert.equal(result[0].skuDetails.length, 1);
+  assert.equal(result[0].skuDetails[0].requestQty, 100);
+  assert.equal(result[0].skuDetails[0].pickedQty, 60);
+});
+
+test("recommendation filter follows schedule_description and remarks", () => {
+  const result = proposeAssignments(
+    [order()],
+    [picker()],
+    [
+      {
+        mpStatus: "REGULER",
+        targetQty: 1_000,
+        maxLoadPct: 120,
+        description: "Regular",
+      },
+    ],
+    undefined,
+    {
+      shifts: ["PAGI"],
+      scheduleDescriptions: ["P5 (05:00 - 14:00)"],
+      mpStatuses: ["REGULER"],
+      zones: ["MZA1"],
+      waves: ["WAVE 1"],
+      drops: ["DROP 1"],
+      remarks: ["PRIORITAS"],
+    },
+  );
+  assert.equal(result.length, 1);
+  assert.equal(result[0].pickerId, "P-1");
 });

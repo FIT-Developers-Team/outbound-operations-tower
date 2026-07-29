@@ -84,9 +84,9 @@ test("rejects unauthenticated live reads and commands", async () => {
 
 test("server-renders every operational area", async () => {
   const routes = [
-    ["/planning", /Pool assignment/i],
+    ["/planning", /Daftar SO siap assign/i],
     ["/zones", /Detail zona/i],
-    ["/people", /Roster picker/i],
+    ["/people", /Top 10 picker/i],
     ["/orders", /Index SO/i],
     ["/checker", /Route checker/i],
     ["/reports", /Kualitas sumber/i],

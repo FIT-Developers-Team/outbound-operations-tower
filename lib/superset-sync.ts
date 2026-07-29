@@ -334,6 +334,18 @@ function buildOrders(
     racks: Set<string>;
     areas: Set<string>;
     skus: Set<string>;
+    skuDetails: Map<
+      string,
+      {
+        skuNumber: string;
+        productId: string;
+        productName: string;
+        requestQty: number;
+        pickedQty: number;
+        lineCount: number;
+      }
+    >;
+    remarks: Set<string>;
     lineCount: number;
     pickerIds: Set<string>;
   };
@@ -367,6 +379,8 @@ function buildOrders(
       racks: new Set<string>(),
       areas: new Set<string>(),
       skus: new Set<string>(),
+      skuDetails: new Map(),
+      remarks: new Set<string>(),
       lineCount: 0,
       pickerIds: new Set<string>(),
     };
@@ -377,6 +391,22 @@ function buildOrders(
     if (area) group.areas.add(area);
     const sku = value(row, "sku_number", "product_id");
     if (sku) group.skus.add(sku);
+    if (sku) {
+      const currentSku = group.skuDetails.get(sku) ?? {
+        skuNumber: value(row, "sku_number"),
+        productId: value(row, "product_id"),
+        productName: value(row, "product_name") || `SKU ${sku}`,
+        requestQty: 0,
+        pickedQty: 0,
+        lineCount: 0,
+      };
+      currentSku.requestQty += quantity;
+      currentSku.pickedQty += endAt ? quantity : 0;
+      currentSku.lineCount += 1;
+      group.skuDetails.set(sku, currentSku);
+    }
+    const remark = value(row, "remarks");
+    if (remark) group.remarks.add(remark);
     if (pickerId) group.pickerIds.add(pickerId);
     group.lineCount += 1;
     groups.set(key, group);
@@ -413,9 +443,13 @@ function buildOrders(
       mappingStatus: rule ? "MAPPED" : "UNMAPPED",
       status,
       priority: normalizePriority(value(row, "supply_order_priority", "priority")),
+      remarks: [...group.remarks].sort(),
       requestQty: group.requestQty,
       pickedQty: Math.min(group.requestQty, group.pickedQty),
       skuCount: group.skus.size,
+      skuDetails: [...group.skuDetails.values()].sort(
+        (a, b) => b.requestQty - a.requestQty || a.skuNumber.localeCompare(b.skuNumber),
+      ),
       lineCount: group.lineCount,
       rackLevel: [...new Set(levels)].join(", ") || "-",
       pickerId: group.pickerIds.size === 1 ? [...group.pickerIds][0] : null,

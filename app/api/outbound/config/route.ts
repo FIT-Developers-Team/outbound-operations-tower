@@ -8,6 +8,9 @@ import {
   saveStoredConnector,
 } from "@/lib/runtime-storage";
 
+const DEFAULT_EXPORT_PATH =
+  "/api/v1/chart/{sliceId}/data/?format=csv&force=true";
+
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
 }
@@ -94,29 +97,19 @@ export async function POST(request: NextRequest) {
     const baseUrl = normalizeBaseUrl(String(body.baseUrl ?? ""));
     const soSliceId = String(body.soSliceId ?? "").trim();
     const staffSliceId = String(body.staffSliceId ?? "").trim();
-    const pathTemplate = String(body.pathTemplate ?? "").trim();
     const cookie = String(body.cookie ?? "").trim();
-    const expiresAt = String(body.cookieExpiresAt ?? "").trim();
+    const refreshIntervalMinutes = Math.min(
+      60,
+      Math.max(1, Number(body.refreshIntervalMinutes) || 5),
+    );
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(soSliceId)) {
       throw new Error("Slice ID SO tidak valid.");
     }
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(staffSliceId)) {
       throw new Error("Slice ID staff tidak valid.");
     }
-    if (
-      !pathTemplate.startsWith("/") ||
-      !pathTemplate.includes("{sliceId}") ||
-      pathTemplate.length > 1_000
-    ) {
-      throw new Error(
-        "Path export harus relatif dan memuat token {sliceId}.",
-      );
-    }
     if (cookie && (cookie.length > 16_000 || /[\r\n]/.test(cookie))) {
       throw new Error("Cookie tidak valid.");
-    }
-    if (expiresAt && Number.isNaN(Date.parse(expiresAt))) {
-      throw new Error("Tanggal kedaluwarsa cookie tidak valid.");
     }
     const encrypted = cookie ? await encryptCookie(cookie) : null;
     const now = new Date().toISOString();
@@ -125,16 +118,17 @@ export async function POST(request: NextRequest) {
       baseUrl,
       soSliceId,
       staffSliceId,
-      pathTemplate,
+      pathTemplate: DEFAULT_EXPORT_PATH,
+      refreshIntervalMinutes,
       cookieCiphertext: encrypted?.ciphertext ?? current.cookieCiphertext,
       cookieIv: encrypted?.iv ?? current.cookieIv,
-      cookieExpiresAt: expiresAt || current.cookieExpiresAt,
+      cookieExpiresAt: cookie ? null : current.cookieExpiresAt,
       cookieUpdatedAt: cookie ? now : current.cookieUpdatedAt,
       health:
         encrypted || current.cookieCiphertext || process.env.SUPERSET_SESSION_COOKIE
           ? "READY"
           : "NOT_CONFIGURED",
-      lastMessage: "Konfigurasi disimpan; jalankan uji sync.",
+      lastMessage: "Koneksi disimpan. Jalankan uji sync.",
       updatedAt: now,
     });
     return NextResponse.json({
