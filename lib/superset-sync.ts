@@ -28,8 +28,12 @@ import type {
   ZoneRule,
 } from "./outbound-types";
 import { runtimeEnv } from "./runtime-env";
-
-type RawRecord = Record<string, string>;
+import {
+  normalizeSupersetHeader,
+  parseSupersetExport,
+  validateSupersetRecords,
+  type RawRecord,
+} from "./superset-payload";
 
 type ExportResult = {
   body: string;
@@ -75,118 +79,6 @@ const DEFAULT_TARGETS: TargetRule[] = [
     description: "Mulai hari ke-21.",
   },
 ];
-
-function normalizeHeader(value: string) {
-  return value
-    .replace(/^\uFEFF/, "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, "_");
-}
-
-function firstLine(value: string) {
-  const index = value.search(/\r?\n/);
-  return index === -1 ? value : value.slice(0, index);
-}
-
-function detectDelimiter(value: string) {
-  const header = firstLine(value);
-  const tabs = (header.match(/\t/g) ?? []).length;
-  const commas = (header.match(/,/g) ?? []).length;
-  return tabs > commas ? "\t" : ",";
-}
-
-/**
- * RFC-4180 compatible enough for Superset CSV, with TSV auto-detection and
- * support for quoted delimiters/newlines.
- */
-export function parseDelimited(value: string): RawRecord[] {
-  const delimiter = detectDelimiter(value);
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let quoted = false;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quoted) {
-      if (character === '"' && value[index + 1] === '"') {
-        field += '"';
-        index += 1;
-      } else if (character === '"') {
-        quoted = false;
-      } else {
-        field += character;
-      }
-      continue;
-    }
-    if (character === '"') {
-      quoted = true;
-    } else if (character === delimiter) {
-      row.push(field);
-      field = "";
-    } else if (character === "\n") {
-      row.push(field.replace(/\r$/, ""));
-      rows.push(row);
-      row = [];
-      field = "";
-    } else {
-      field += character;
-    }
-  }
-  if (field.length || row.length) {
-    row.push(field.replace(/\r$/, ""));
-    rows.push(row);
-  }
-  const headers = (rows.shift() ?? []).map(normalizeHeader);
-  return rows
-    .filter((values) => values.some((item) => item.trim().length > 0))
-    .map((values) =>
-      Object.fromEntries(
-        headers.map((header, index) => [header, values[index]?.trim() ?? ""]),
-      ),
-    );
-}
-
-function recordsFromJson(value: unknown): RawRecord[] {
-  if (Array.isArray(value)) {
-    return value.filter(
-      (row): row is RawRecord =>
-        Boolean(row) && typeof row === "object" && !Array.isArray(row),
-    );
-  }
-  if (!value || typeof value !== "object") return [];
-  const object = value as Record<string, unknown>;
-  if (typeof object.data === "string") return parseDelimited(object.data);
-  if (Array.isArray(object.data)) return recordsFromJson(object.data);
-  if (Array.isArray(object.result)) {
-    for (const result of object.result) {
-      const records = recordsFromJson(result);
-      if (records.length) return records;
-    }
-  }
-  if (object.query_data) return recordsFromJson(object.query_data);
-  return [];
-}
-
-export function parseSupersetExport(
-  body: string,
-  contentType: string,
-): RawRecord[] {
-  const trimmed = body.trimStart();
-  if (contentType.includes("json") || trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    const parsed = JSON.parse(body) as unknown;
-    return recordsFromJson(parsed).map((record) =>
-      Object.fromEntries(
-        Object.entries(record).map(([key, value]) => [
-          normalizeHeader(key),
-          String(value ?? "").trim(),
-        ]),
-      ),
-    );
-  }
-  return parseDelimited(body);
-}
 
 function filterSummary(input: unknown) {
   if (!input || typeof input !== "object") return "";
@@ -352,7 +244,7 @@ async function fetchExport(
 
 function value(row: RawRecord, ...names: string[]) {
   for (const name of names) {
-    const resolved = row[normalizeHeader(name)];
+    const resolved = row[normalizeSupersetHeader(name)];
     if (resolved !== undefined) return resolved;
   }
   return "";
@@ -360,6 +252,10 @@ function value(row: RawRecord, ...names: string[]) {
 
 function datePart(input: string) {
   return input.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? "";
+}
+
+function supplyOrderDate(row: RawRecord) {
+  return value(row, "so_date", "supply_order_created_at");
 }
 
 function normalizePriority(raw: string): "High" | "Medium" | "Low" {
@@ -410,7 +306,7 @@ function buildOrders(
   };
   const groups = new Map<string, Group>();
   records.forEach((row) => {
-    const soDate = value(row, "so_date", "supply_order_created_at");
+    const soDate = supplyOrderDate(row);
     if (!soDate.startsWith(month)) return;
     const soNumber = value(row, "so_number");
     if (!soNumber) return;
@@ -473,7 +369,7 @@ function buildOrders(
 
   return [...groups.entries()].map(([id, group]) => {
     const row = group.first;
-    const soDate = datePart(value(row, "so_date")) || `${month}-01`;
+    const soDate = datePart(supplyOrderDate(row)) || `${month}-01`;
     const createdAt = value(
       row,
       "supply_order_created_at",
@@ -611,7 +507,7 @@ function buildPickers(
 function buildHourly(records: RawRecord[], month: string): HourlyPoint[] {
   const byHour = new Map<string, HourlyPoint>();
   records.forEach((row) => {
-    const soDate = value(row, "so_date", "supply_order_created_at");
+    const soDate = supplyOrderDate(row);
     if (!soDate.startsWith(month)) return;
     const created = value(row, "supply_order_created_at");
     const createdHour = created.slice(11, 13);
@@ -762,7 +658,7 @@ function buildDataset(
   const fallback = createDemoDataset();
   const sourceDate = maxDate(
     [
-      ...soRecords.map((row) => value(row, "so_date")),
+      ...soRecords.map(supplyOrderDate),
       ...staffRecords.map((row) => value(row, "date_key")),
     ],
     `${month}-01`,
@@ -797,7 +693,7 @@ function buildDataset(
   const completedLineQty = soRecords
     .filter(
       (row) =>
-        value(row, "so_date").startsWith(month) &&
+        supplyOrderDate(row).startsWith(month) &&
         Boolean(value(row, "picking_end_at")),
     )
     .reduce(
@@ -847,22 +743,21 @@ function buildDataset(
     pickerProductivity: buildPickerProductivity(soRecords, month, pickers),
     sourceProfile: {
       sourceDate,
-      soRows: soRecords.filter((row) =>
-        value(row, "so_date").startsWith(month),
-      ).length,
+      soRows: soRecords.filter((row) => supplyOrderDate(row).startsWith(month))
+        .length,
       distinctSo,
       soZoneSplits: orders.length,
       multiZoneSo: [...bySo.values()].filter((count) => count > 1).length,
       newRows: soRecords.filter(
         (row) =>
-          value(row, "so_date").startsWith(month) &&
+          supplyOrderDate(row).startsWith(month) &&
           normalizeStatus(value(row, "status")) === "NEW",
       ).length,
       newSo: new Set(
         soRecords
           .filter(
             (row) =>
-              value(row, "so_date").startsWith(month) &&
+              supplyOrderDate(row).startsWith(month) &&
               normalizeStatus(value(row, "status")) === "NEW",
           )
           .map((row) => value(row, "so_number")),
@@ -947,6 +842,18 @@ export async function syncFromSuperset(
     ),
     loadDatasetSnapshot(),
   ]);
+  const soValidation = validateSupersetRecords(
+    soExport.records,
+    "so",
+    month.key,
+    connector.soSliceId,
+  );
+  const staffValidation = validateSupersetRecords(
+    staffExport.records,
+    "staff",
+    month.key,
+    connector.staffSliceId,
+  );
   const dataset = buildDataset(
     soExport.records,
     staffExport.records,
@@ -966,6 +873,15 @@ export async function syncFromSuperset(
       timezone: connector.warehouseTimezone,
     },
   );
+  if (
+    dataset.orders.length === 0 ||
+    dataset.sourceProfile.soRows !== soValidation.currentMonthRows ||
+    dataset.sourceProfile.staffRows !== staffValidation.currentMonthRows
+  ) {
+    throw new Error(
+      "Transformasi snapshot tidak konsisten dengan payload Superset. Snapshot lama dipertahankan; periksa struktur chart sebelum mencoba lagi.",
+    );
+  }
   const syncedAt = new Date().toISOString();
   await Promise.all([
     saveRawExport(
