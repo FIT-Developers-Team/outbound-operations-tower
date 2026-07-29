@@ -63,7 +63,7 @@ test("server-renders the outbound assignment hub", async () => {
   const html = await response.text();
   assert.match(html, /CBT Outbound Operations Hub/i);
   assert.match(html, /Ringkasan outbound/i);
-  assert.match(html, /Request vs selesai pick/i);
+  assert.match(html, /Request masuk &amp; selesai pick/i);
   assert.doesNotMatch(html, /Spatial operations|spatial-hero/i);
   assert.doesNotMatch(html, /CBT Supervisor|Pimpinan operasi/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);

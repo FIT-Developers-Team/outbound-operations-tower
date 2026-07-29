@@ -586,11 +586,30 @@ kbd {
 }
 
 .metric-card {
+  position: relative;
   display: grid;
   min-width: 0;
-  gap: 3px;
-  padding: 14px 16px;
+  min-height: 108px;
+  align-content: center;
+  gap: 5px;
+  padding: 17px 18px;
   border-right: 1px solid var(--line);
+  background: linear-gradient(
+    145deg,
+    color-mix(in oklab, var(--metric-tone) 5%, transparent),
+    transparent 54%
+  );
+}
+
+.metric-card::before {
+  position: absolute;
+  top: 0;
+  right: 18px;
+  left: 18px;
+  height: 2px;
+  border-radius: 0 0 999px 999px;
+  background: color-mix(in oklab, var(--metric-tone) 75%, transparent);
+  content: "";
 }
 
 .metric-card:last-child {
@@ -618,7 +637,7 @@ kbd {
 
 .metric-value {
   overflow: hidden;
-  font-size: clamp(22px, 2.2vw, 30px);
+  font-size: clamp(24px, 2.35vw, 32px);
   line-height: 1.15;
   text-overflow: ellipsis;
 }
@@ -634,11 +653,11 @@ kbd {
 .dashboard-grid {
   display: grid;
   min-width: 0;
-  gap: 18px;
+  gap: 16px;
 }
 
 .dashboard-grid-main {
-  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.8fr);
+  grid-template-columns: minmax(0, 1.65fr) minmax(290px, 0.75fr);
 }
 
 .dashboard-grid-side {
@@ -673,13 +692,78 @@ kbd {
   background: var(--teal);
 }
 
+.throughput-chart {
+  display: grid;
+  min-width: 0;
+  gap: 13px;
+  margin: 0;
+}
+
+.throughput-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.throughput-summary > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.throughput-summary small {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.throughput-summary small i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+}
+
+.throughput-summary strong {
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+}
+
+.throughput-plot {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.throughput-scale {
+  display: flex;
+  padding: 34px 0 25px;
+  flex-direction: column;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 9px;
+  text-align: right;
+}
+
 .bar-chart {
   display: flex;
-  height: 230px;
+  height: 250px;
+  min-width: 0;
   align-items: stretch;
-  gap: clamp(6px, 1.4vw, 18px);
-  padding: 10px 6px 2px;
-  border-bottom: 1px solid var(--line);
+  gap: clamp(4px, 1vw, 13px);
+  overflow: hidden;
+  padding: 0 4px;
   background: repeating-linear-gradient(
     to bottom,
     transparent 0,
@@ -692,14 +776,50 @@ kbd {
   display: grid;
   min-width: 16px;
   flex: 1;
-  grid-template-rows: minmax(0, 1fr) 20px;
-  gap: 6px;
+  grid-template-rows: 34px minmax(0, 1fr) 25px;
+  gap: 4px;
+  border-radius: 8px 8px 0 0;
+  outline: none;
   text-align: center;
 }
 
+.bar-column:hover,
+.bar-column:focus-visible {
+  background: color-mix(in oklab, var(--accent) 7%, transparent);
+}
+
 .bar-column strong {
-  color: var(--text-muted);
+  display: grid;
+  border-top: 1px solid var(--line);
+  color: var(--text-soft);
   font-size: 10px;
+  place-items: center;
+}
+
+.bar-value {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.bar-value small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bar-value-request {
+  color: var(--accent) !important;
+}
+
+.bar-value-picked {
+  color: var(--teal) !important;
 }
 
 .bar-pair {
@@ -708,20 +828,54 @@ kbd {
   align-items: end;
   justify-content: center;
   gap: 3px;
+  overflow: hidden;
 }
 
 .bar-pair i {
-  width: min(14px, 42%);
-  min-height: 2px;
+  display: block;
+  width: min(15px, 42%);
   border-radius: 4px 4px 1px 1px;
 }
 
 .bar-request {
-  background: color-mix(in oklab, var(--accent) 34%, var(--surface));
+  background: color-mix(in oklab, var(--accent) 55%, var(--surface));
 }
 
 .bar-picked {
   background: var(--teal);
+}
+
+.throughput-chart figcaption {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.chart-empty {
+  display: grid;
+  min-height: 260px;
+  place-content: center;
+  gap: 4px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.chart-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.chart-empty span {
+  max-width: 430px;
+  font-size: 11px;
+}
+
+.overview-backlog .rank-bars {
+  gap: 12px;
+}
+
+.overview-backlog .rank-bars button {
+  min-height: 30px;
 }
 
 .rank-bars,
@@ -2053,30 +2207,6 @@ textarea.input {
   padding-right: 62px;
 }
 
-.bar-chart {
-  height: 250px;
-  padding-top: 4px;
-}
-
-.bar-column {
-  grid-template-rows: 24px minmax(0, 1fr) 20px;
-}
-
-.bar-value {
-  display: grid;
-  align-content: end;
-  color: var(--text);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.bar-value small {
-  color: var(--text-muted);
-  font-size: 8px;
-  font-weight: 500;
-}
-
 .chart-value-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2810,6 +2940,24 @@ textarea.input {
 
   .chart-value-strip {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .throughput-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .throughput-plot {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .bar-chart {
+    height: 230px;
+    gap: 3px;
+  }
+
+  .bar-value small {
+    font-size: 8px;
   }
 
   .shift-productivity {

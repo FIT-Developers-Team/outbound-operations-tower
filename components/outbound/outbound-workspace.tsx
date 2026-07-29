@@ -530,36 +530,133 @@ function MetricStrip({
 
 function ThroughputChart({ data }: { data: DemoDataset }) {
   const points = data.hourly.slice(-12);
-  const max = Math.max(...points.map((point) => point.requestQty), 1);
+  const rawMax = Math.max(
+    ...points.flatMap((point) => [point.requestQty, point.pickedQty]),
+    1,
+  );
+  const magnitude = 10 ** Math.floor(Math.log10(rawMax));
+  const normalizedMax = rawMax / magnitude;
+  const scaleMax =
+    (normalizedMax <= 1
+      ? 1
+      : normalizedMax <= 2
+        ? 2
+        : normalizedMax <= 5
+          ? 5
+          : 10) * magnitude;
   const compact = new Intl.NumberFormat("id-ID", {
     notation: "compact",
     maximumFractionDigits: 1,
   });
+  const requestTotal = points.reduce(
+    (sum, point) => sum + point.requestQty,
+    0,
+  );
+  const pickedTotal = points.reduce(
+    (sum, point) => sum + point.pickedQty,
+    0,
+  );
+  const peak = points.reduce(
+    (current, point) =>
+      Math.max(point.requestQty, point.pickedQty) >
+      Math.max(current?.requestQty ?? 0, current?.pickedQty ?? 0)
+        ? point
+        : current,
+    points[0],
+  );
+
+  if (!points.length) {
+    return (
+      <div className="chart-empty">
+        <strong>Belum ada aktivitas per jam</strong>
+        <span>
+          Grafik akan terisi setelah snapshot memiliki waktu request atau selesai
+          pick.
+        </span>
+      </div>
+    );
+  }
+
   return (
-    <div className="bar-chart" role="img" aria-label="Request dan selesai pick per jam">
-      {points.map((point) => (
-        <div className="bar-column" key={point.hour}>
-          <span className="bar-value num">
-            {compact.format(point.pickedQty)}
-            <small>/ {compact.format(point.requestQty)}</small>
-          </span>
-          <span
-            className="bar-pair"
-            title={`${point.hour}:00 · ${number.format(point.pickedQty)} selesai dari ${number.format(point.requestQty)}`}
-          >
-            <i
-              className="bar-request"
-              style={{ height: `${Math.max(2, (point.requestQty / max) * 100)}%` }}
-            />
-            <i
-              className="bar-picked"
-              style={{ height: `${Math.max(2, (point.pickedQty / max) * 100)}%` }}
-            />
-          </span>
-          <strong className="num">{point.hour}</strong>
+    <figure
+      aria-label="Request masuk dan selesai pick per jam"
+      className="throughput-chart"
+    >
+      <div className="throughput-summary">
+        <span>
+          <small>
+            <i className="request-dot" />
+            Request masuk
+          </small>
+          <strong className="num">{number.format(requestTotal)}</strong>
+        </span>
+        <span>
+          <small>
+            <i className="picked-dot" />
+            Selesai pick
+          </small>
+          <strong className="num">{number.format(pickedTotal)}</strong>
+        </span>
+        <span>
+          <small>Jam aktivitas puncak</small>
+          <strong className="num">{peak?.hour ?? "--"}:00</strong>
+        </span>
+      </div>
+
+      <div className="throughput-plot">
+        <div aria-hidden="true" className="throughput-scale num">
+          <span>{compact.format(scaleMax)}</span>
+          <span>{compact.format(scaleMax / 2)}</span>
+          <span>0</span>
         </div>
-      ))}
-    </div>
+        <div className="bar-chart">
+          {points.map((point) => {
+            const requestHeight =
+              point.requestQty > 0
+                ? Math.max(2, Math.min(100, (point.requestQty / scaleMax) * 100))
+                : 0;
+            const pickedHeight =
+              point.pickedQty > 0
+                ? Math.max(2, Math.min(100, (point.pickedQty / scaleMax) * 100))
+                : 0;
+            return (
+              <div
+                aria-label={`${point.hour}:00, request ${number.format(point.requestQty)} unit, selesai pick ${number.format(point.pickedQty)} unit`}
+                className="bar-column"
+                key={point.hour}
+                role="group"
+                tabIndex={0}
+                title={`${point.hour}:00 · Request ${number.format(point.requestQty)} · Selesai ${number.format(point.pickedQty)}`}
+              >
+                <span aria-hidden="true" className="bar-value num">
+                  <small className="bar-value-request">
+                    {compact.format(point.requestQty)}
+                  </small>
+                  <small className="bar-value-picked">
+                    {compact.format(point.pickedQty)}
+                  </small>
+                </span>
+                <span aria-hidden="true" className="bar-pair">
+                  <i
+                    className="bar-request"
+                    style={{ height: `${requestHeight}%` }}
+                  />
+                  <i
+                    className="bar-picked"
+                    style={{ height: `${pickedHeight}%` }}
+                  />
+                </span>
+                <strong className="num">{point.hour}</strong>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <figcaption>
+        Request mengikuti waktu order dibuat; selesai pick mengikuti waktu proses
+        berakhir.
+      </figcaption>
+    </figure>
   );
 }
 
@@ -749,13 +846,18 @@ function OverviewView({ data }: { data: DemoDataset }) {
 
       <div className="dashboard-grid dashboard-grid-main">
         <Section
-          eyebrow="12 jam terakhir"
-          title="Request vs selesai pick"
-          action={<span className="chart-legend"><i className="request-dot" />Request <i className="picked-dot" />Selesai</span>}
+          className="overview-throughput"
+          eyebrow="12 jam terakhir · unit per jam"
+          title="Request masuk & selesai pick"
+          action={<span className="chart-legend"><i className="request-dot" />Masuk <i className="picked-dot" />Selesai</span>}
         >
           <ThroughputChart data={data} />
         </Section>
-        <Section eyebrow="Prioritas" title="Backlog zona">
+        <Section
+          className="overview-backlog"
+          eyebrow="Prioritas kerja"
+          title="Backlog per zona"
+        >
           <ZoneBacklogChart data={data} onSelect={setDetailZone} />
         </Section>
       </div>
