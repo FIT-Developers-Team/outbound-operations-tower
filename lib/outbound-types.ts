@@ -162,6 +162,24 @@ export type HourlyPoint = {
   activeMp: number;
 };
 
+export type PickerProductivityPoint = {
+  pickerId: string;
+  pickerName: string;
+  date: string;
+  hour: string;
+  pickedQty: number;
+  soCount: number;
+  skuCount: number;
+  shift: ShiftCode;
+  scheduleDescription: string;
+};
+
+export type WarehouseProfile = {
+  code: string;
+  name: string;
+  timezone: string;
+};
+
 export type AssignmentProposal = {
   orderId: string;
   soNumber: string;
@@ -231,6 +249,11 @@ export type SourceProfile = {
   checkedInRows: number;
   dateRange?: { from: string; to: string };
   completedLineQty?: number;
+  savedChartFilters?: {
+    so: string[];
+    staff: string[];
+    rejected: string[];
+  };
   qualityNotes: string[];
 };
 
@@ -249,6 +272,9 @@ export type ConnectorPublicConfig = {
   staffSliceId: string;
   pathTemplate: string;
   refreshIntervalMinutes: number;
+  warehouseCode: string;
+  warehouseName: string;
+  warehouseTimezone: string;
   currentMonthOnly: true;
   cookiePresent: boolean;
   cookieSource: "stored" | "environment" | "none";
@@ -263,6 +289,7 @@ export type ConnectorPublicConfig = {
 };
 
 export type DemoDataset = {
+  warehouse: WarehouseProfile;
   orders: SupplyOrder[];
   pickers: Picker[];
   destinationRules: DestinationRule[];
@@ -271,5 +298,6 @@ export type DemoDataset = {
   checkerRoutes: CheckerRoute[];
   audit: AuditEvent[];
   hourly: HourlyPoint[];
+  pickerProductivity: PickerProductivityPoint[];
   sourceProfile: SourceProfile;
 };

@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
+import {
+  anonymousReadEnabled,
+  authRequiredMessage,
+  getOutboundAccess,
+} from "@/lib/request-auth";
 import {
   encryptCookie,
   getConnectorPublicConfig,
@@ -7,25 +11,13 @@ import {
   hasPersistentBindings,
   saveStoredConnector,
 } from "@/lib/runtime-storage";
+import { runtimeEnv } from "@/lib/runtime-env";
 
 const DEFAULT_EXPORT_PATH =
-  "/api/v1/chart/{sliceId}/data/?format=csv&force=true";
+  "/api/v1/chart/{sliceId}/data/?format=json&type=full&force=true";
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
-}
-
-async function requireAdmin() {
-  const user = await getChatGPTUser();
-  if (!user) return { user: null, authenticated: false };
-  const allowed = (process.env.OUTBOUND_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-  return {
-    user: allowed.includes(user.email.toLowerCase()) ? user : null,
-    authenticated: true,
-  };
 }
 
 function normalizeBaseUrl(value: string) {
@@ -36,7 +28,7 @@ function normalizeBaseUrl(value: string) {
   if (url.protocol !== "https:" && !local) {
     throw new Error("Base URL Superset wajib HTTPS.");
   }
-  const allowedHosts = (process.env.SUPERSET_ALLOWED_HOSTS ?? "")
+  const allowedHosts = (runtimeEnv("SUPERSET_ALLOWED_HOSTS") ?? "")
     .split(",")
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
@@ -49,10 +41,10 @@ function normalizeBaseUrl(value: string) {
   return url.origin;
 }
 
-export async function GET() {
-  const allowAnonymous = process.env.OUTBOUND_ALLOW_ANONYMOUS_READ === "true";
-  if (!allowAnonymous && !(await getChatGPTUser())) {
-    return error(401, "AUTH_REQUIRED", "Masuk diperlukan.");
+export async function GET(request: NextRequest) {
+  const access = await getOutboundAccess(request);
+  if (!anonymousReadEnabled() && !access.authenticated) {
+    return error(401, "AUTH_REQUIRED", authRequiredMessage(request));
   }
   return NextResponse.json({
     ok: true,
@@ -62,12 +54,11 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-  const admin = await requireAdmin();
-  if (!admin.authenticated) {
-    return error(401, "AUTH_REQUIRED", "Masuk diperlukan.");
+  const access = await getOutboundAccess(request);
+  if (!access.authenticated) {
+    return error(401, "AUTH_REQUIRED", authRequiredMessage(request));
   }
-  const user = admin.user;
-  if (!user) {
+  if (!access.admin) {
     return error(
       403,
       "ADMIN_REQUIRED",
@@ -102,6 +93,15 @@ export async function POST(request: NextRequest) {
       60,
       Math.max(1, Number(body.refreshIntervalMinutes) || 5),
     );
+    const warehouseCode = String(body.warehouseCode ?? "CBT")
+      .trim()
+      .toUpperCase();
+    const warehouseName = String(
+      body.warehouseName ?? "CBT - WH Cibitung",
+    ).trim();
+    const warehouseTimezone = String(
+      body.warehouseTimezone ?? "Asia/Jakarta",
+    ).trim();
     if (!/^[A-Za-z0-9_-]{1,80}$/.test(soSliceId)) {
       throw new Error("Slice ID SO tidak valid.");
     }
@@ -110,6 +110,17 @@ export async function POST(request: NextRequest) {
     }
     if (cookie && (cookie.length > 16_000 || /[\r\n]/.test(cookie))) {
       throw new Error("Cookie tidak valid.");
+    }
+    if (!/^[A-Z0-9_-]{2,16}$/.test(warehouseCode)) {
+      throw new Error("Kode warehouse harus 2-16 karakter.");
+    }
+    if (!warehouseName || warehouseName.length > 120) {
+      throw new Error("Nama warehouse tidak valid.");
+    }
+    try {
+      new Intl.DateTimeFormat("id-ID", { timeZone: warehouseTimezone });
+    } catch {
+      throw new Error("Zona waktu warehouse tidak valid.");
     }
     const encrypted = cookie ? await encryptCookie(cookie) : null;
     const now = new Date().toISOString();
@@ -120,12 +131,15 @@ export async function POST(request: NextRequest) {
       staffSliceId,
       pathTemplate: DEFAULT_EXPORT_PATH,
       refreshIntervalMinutes,
+      warehouseCode,
+      warehouseName,
+      warehouseTimezone,
       cookieCiphertext: encrypted?.ciphertext ?? current.cookieCiphertext,
       cookieIv: encrypted?.iv ?? current.cookieIv,
       cookieExpiresAt: cookie ? null : current.cookieExpiresAt,
       cookieUpdatedAt: cookie ? now : current.cookieUpdatedAt,
       health:
-        encrypted || current.cookieCiphertext || process.env.SUPERSET_SESSION_COOKIE
+        encrypted || current.cookieCiphertext || runtimeEnv("SUPERSET_SESSION_COOKIE")
           ? "READY"
           : "NOT_CONFIGURED",
       lastMessage: "Koneksi disimpan. Jalankan uji sync.",

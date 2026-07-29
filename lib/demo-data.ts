@@ -13,6 +13,7 @@ import type {
   MpStatus,
   OrderStatus,
   Picker,
+  PickerProductivityPoint,
   SupplyOrderLine,
   TargetRule,
   Wave,
@@ -273,8 +274,36 @@ const hourlySeed: HourlyPoint[] = [
   { hour: "12", requestQty: 2_710, pickedQty: 0, activeMp: 14 },
 ];
 
+const pickerProductivitySeed: PickerProductivityPoint[] = [];
+for (let day = 15; day <= 28; day += 1) {
+  pickers.forEach((picker, pickerIndex) => {
+    if (!picker.isActive || day % 7 === pickerIndex % 7) return;
+    for (let hour = 5; hour <= 13; hour += 1) {
+      if ((hour + pickerIndex + day) % 5 === 0) continue;
+      const pickedQty =
+        34 + ((day * 37 + pickerIndex * 53 + hour * 29) % 188);
+      pickerProductivitySeed.push({
+        pickerId: picker.id,
+        pickerName: picker.name,
+        date: `2026-07-${String(day).padStart(2, "0")}`,
+        hour: String(hour).padStart(2, "0"),
+        pickedQty,
+        soCount: 1 + ((day + pickerIndex + hour) % 5),
+        skuCount: 3 + ((day * 2 + pickerIndex + hour) % 18),
+        shift: picker.shift,
+        scheduleDescription: picker.scheduleDescription,
+      });
+    }
+  });
+}
+
 export function createDemoDataset(): DemoDataset {
   return {
+    warehouse: {
+      code: "CBT",
+      name: "CBT - WH Cibitung",
+      timezone: "Asia/Jakarta",
+    },
     orders: orderSeed.map((order) => ({
       ...order,
       pickingAreaNames: [...order.pickingAreaNames],
@@ -296,6 +325,7 @@ export function createDemoDataset(): DemoDataset {
     checkerRoutes: checkerSeed.map((route) => ({ ...route })),
     audit: auditSeed.map((event) => ({ ...event })),
     hourly: hourlySeed.map((point) => ({ ...point })),
+    pickerProductivity: pickerProductivitySeed.map((point) => ({ ...point })),
     sourceProfile: {
       sourceDate: "2026-07-28",
       soRows: 51_951,
@@ -310,6 +340,11 @@ export function createDemoDataset(): DemoDataset {
       pickerRows: 175,
       eligiblePickers: 158,
       checkedInRows: 381,
+      savedChartFilters: {
+        so: ["so_date: bulan berjalan", "origin: CBT"],
+        staff: ["date_key: bulan berjalan", "role: OUTBOUND_PICKER_STAFF"],
+        rejected: [],
+      },
       qualityNotes: [
         "Data SO berasal dari level produk/rack, bukan satu baris per SO.",
         "Hanya SO berstatus NEW yang dapat menerima assignment baru.",

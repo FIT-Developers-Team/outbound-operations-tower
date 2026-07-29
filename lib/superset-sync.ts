@@ -22,10 +22,12 @@ import type {
   MpStatus,
   OrderStatus,
   Picker,
+  PickerProductivityPoint,
   SupplyOrder,
   TargetRule,
   ZoneRule,
 } from "./outbound-types";
+import { runtimeEnv } from "./runtime-env";
 
 type RawRecord = Record<string, string>;
 
@@ -33,6 +35,8 @@ type ExportResult = {
   body: string;
   contentType: string;
   records: RawRecord[];
+  appliedFilters: string[];
+  rejectedFilters: string[];
 };
 
 export type SyncResult = {
@@ -184,6 +188,61 @@ export function parseSupersetExport(
   return parseDelimited(body);
 }
 
+function filterSummary(input: unknown) {
+  if (!input || typeof input !== "object") return "";
+  const filter = input as Record<string, unknown>;
+  const column = String(
+    filter.column ??
+      filter.col ??
+      filter.subject ??
+      filter.name ??
+      "Filter chart",
+  );
+  const operator = String(filter.operator ?? filter.op ?? "").trim();
+  const rawValue =
+    filter.value ??
+    filter.val ??
+    filter.comparator ??
+    filter.filter_val ??
+    filter.filterState ??
+    "";
+  const valueText =
+    typeof rawValue === "string"
+      ? rawValue
+      : Array.isArray(rawValue)
+        ? rawValue.join(", ")
+        : rawValue && typeof rawValue === "object"
+          ? JSON.stringify(rawValue)
+          : String(rawValue ?? "");
+  return [column, operator, valueText].filter(Boolean).join(" ").slice(0, 220);
+}
+
+function readFilterMetadata(body: string, contentType: string) {
+  if (!contentType.includes("json") && !body.trimStart().startsWith("{")) {
+    return { appliedFilters: [], rejectedFilters: [] };
+  }
+  try {
+    const root = JSON.parse(body) as Record<string, unknown>;
+    const results = Array.isArray(root.result) ? root.result : [root];
+    const appliedFilters = results.flatMap((result) => {
+      if (!result || typeof result !== "object") return [];
+      const value = (result as Record<string, unknown>).applied_filters;
+      return Array.isArray(value) ? value.map(filterSummary).filter(Boolean) : [];
+    });
+    const rejectedFilters = results.flatMap((result) => {
+      if (!result || typeof result !== "object") return [];
+      const value = (result as Record<string, unknown>).rejected_filters;
+      return Array.isArray(value) ? value.map(filterSummary).filter(Boolean) : [];
+    });
+    return {
+      appliedFilters: [...new Set(appliedFilters)],
+      rejectedFilters: [...new Set(rejectedFilters)],
+    };
+  } catch {
+    return { appliedFilters: [], rejectedFilters: [] };
+  }
+}
+
 function jakartaMonth(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Jakarta",
@@ -214,7 +273,7 @@ function validateBaseUrl(value: string) {
   if (url.protocol !== "https:" && !local) {
     throw new Error("Base URL Superset wajib memakai HTTPS.");
   }
-  const allowlist = (process.env.SUPERSET_ALLOWED_HOSTS ?? "")
+  const allowlist = (runtimeEnv("SUPERSET_ALLOWED_HOSTS") ?? "")
     .split(",")
     .map((host) => host.trim().toLowerCase())
     .filter(Boolean);
@@ -288,7 +347,7 @@ async function fetchExport(
   if (!records.length) {
     throw new Error(`Slice ${sliceId} tidak mengembalikan baris data.`);
   }
-  return { body, contentType, records };
+  return { body, contentType, records, ...readFilterMetadata(body, contentType) };
 }
 
 function value(row: RawRecord, ...names: string[]) {
@@ -591,6 +650,87 @@ function buildHourly(records: RawRecord[], month: string): HourlyPoint[] {
   return [...byHour.values()].sort((a, b) => a.hour.localeCompare(b.hour));
 }
 
+function buildPickerProductivity(
+  records: RawRecord[],
+  month: string,
+  pickers: Picker[],
+): PickerProductivityPoint[] {
+  type Bucket = {
+    pickerId: string;
+    pickerName: string;
+    date: string;
+    hour: string;
+    pickedQty: number;
+    so: Set<string>;
+    sku: Set<string>;
+  };
+  const buckets = new Map<string, Bucket>();
+  records.forEach((row) => {
+    const completed = value(row, "picking_end_at");
+    const date = datePart(completed);
+    if (!date.startsWith(month)) return;
+    const pickerId = value(row, "picking_staff_id", "staff_id");
+    if (!pickerId) return;
+    const hour = completed.slice(11, 13);
+    if (!hour) return;
+    const key = `${date}::${hour}::${pickerId}`;
+    const bucket = buckets.get(key) ?? {
+      pickerId,
+      pickerName:
+        value(
+          row,
+          "picker_name",
+          "picking_staff_name",
+          "staff_name",
+        ) || pickers.find((picker) => picker.id === pickerId)?.name || pickerId,
+      date,
+      hour,
+      pickedQty: 0,
+      so: new Set<string>(),
+      sku: new Set<string>(),
+    };
+    bucket.pickedQty += Math.max(
+      0,
+      Number(
+        value(
+          row,
+          "SUM(request_quantity)",
+          "sum(request_quantity)",
+          "request_quantity",
+          "request_qty",
+        ).replaceAll(",", ""),
+      ) || 0,
+    );
+    const soNumber = value(row, "so_number");
+    const skuNumber = value(row, "sku_number", "product_id");
+    if (soNumber) bucket.so.add(soNumber);
+    if (skuNumber) bucket.sku.add(skuNumber);
+    buckets.set(key, bucket);
+  });
+  const pickerById = new Map(pickers.map((picker) => [picker.id, picker]));
+  return [...buckets.values()]
+    .map((bucket) => {
+      const picker = pickerById.get(bucket.pickerId);
+      return {
+        pickerId: bucket.pickerId,
+        pickerName: bucket.pickerName,
+        date: bucket.date,
+        hour: bucket.hour,
+        pickedQty: bucket.pickedQty,
+        soCount: bucket.so.size,
+        skuCount: bucket.sku.size,
+        shift: picker?.shift ?? deriveShift(`${bucket.date} ${bucket.hour}:00:00`),
+        scheduleDescription: picker?.scheduleDescription ?? "-",
+      };
+    })
+    .sort(
+      (a, b) =>
+        a.date.localeCompare(b.date) ||
+        a.hour.localeCompare(b.hour) ||
+        a.pickerName.localeCompare(b.pickerName, "id"),
+    );
+}
+
 function deriveZoneRules(orders: SupplyOrder[]): ZoneRule[] {
   const areas = new Map<string, Set<string>>();
   orders.forEach((order) => {
@@ -612,6 +752,12 @@ function buildDataset(
   staffRecords: RawRecord[],
   month: string,
   previous: DemoDataset | null,
+  chartFilters?: {
+    so: string[];
+    staff: string[];
+    rejected: string[];
+  },
+  warehouse?: DemoDataset["warehouse"],
 ): DemoDataset {
   const fallback = createDemoDataset();
   const sourceDate = maxDate(
@@ -669,6 +815,13 @@ function buildDataset(
     );
 
   return {
+    warehouse: warehouse ?? previous?.warehouse ?? {
+      code: "CBT",
+      name:
+        value(soRecords[0] ?? {}, "origin_location_name") ||
+        "CBT - WH Cibitung",
+      timezone: "Asia/Jakarta",
+    },
     orders,
     pickers,
     destinationRules,
@@ -691,6 +844,7 @@ function buildDataset(
       ...(previous?.audit ?? []),
     ].slice(0, 40),
     hourly: buildHourly(soRecords, month),
+    pickerProductivity: buildPickerProductivity(soRecords, month, pickers),
     sourceProfile: {
       sourceDate,
       soRows: soRecords.filter((row) =>
@@ -737,6 +891,11 @@ function buildDataset(
       ).length,
       completedLineQty,
       dateRange: { from: `${month}-01`, to: sourceDate },
+      savedChartFilters: chartFilters ?? {
+        so: [],
+        staff: [],
+        rejected: [],
+      },
       qualityNotes: [
         "Grain SO dipertahankan sebagai SO × picking zone.",
         "Picked quantity hanya dihitung dari line dengan picking_end_at terisi.",
@@ -793,6 +952,19 @@ export async function syncFromSuperset(
     staffExport.records,
     month.key,
     previous?.data ?? null,
+    {
+      so: soExport.appliedFilters,
+      staff: staffExport.appliedFilters,
+      rejected: [
+        ...soExport.rejectedFilters.map((filter) => `SO: ${filter}`),
+        ...staffExport.rejectedFilters.map((filter) => `Staff: ${filter}`),
+      ],
+    },
+    {
+      code: connector.warehouseCode,
+      name: connector.warehouseName,
+      timezone: connector.warehouseTimezone,
+    },
   );
   const syncedAt = new Date().toISOString();
   await Promise.all([

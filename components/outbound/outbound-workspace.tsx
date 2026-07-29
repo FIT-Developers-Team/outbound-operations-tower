@@ -1,12 +1,27 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
 } from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronDown,
+  Cloud,
+  Database,
+  Filter,
+  RefreshCw,
+  Search,
+  Server,
+  ShieldCheck,
+  Warehouse,
+} from "lucide-react";
 import {
   aggregateMetrics,
   assessDataQuality,
@@ -260,6 +275,79 @@ function Pagination({
   );
 }
 
+type SortDirection = "asc" | "desc";
+type SortState<K extends string = string> = {
+  key: K;
+  direction: SortDirection;
+};
+
+function sortRows<T, K extends string>(
+  rows: T[],
+  sort: SortState<K>,
+  selectors: Record<K, (row: T) => string | number | boolean | null>,
+) {
+  const selector = selectors[sort.key];
+  const direction = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const a = selector(left);
+    const b = selector(right);
+    if (typeof a === "number" && typeof b === "number") {
+      return (a - b) * direction;
+    }
+    return String(a ?? "").localeCompare(String(b ?? ""), "id", {
+      numeric: true,
+      sensitivity: "base",
+    }) * direction;
+  });
+}
+
+function SortableHeader<K extends string>({
+  column,
+  label,
+  sort,
+  onSort,
+  numeric = false,
+}: {
+  column: K;
+  label: string;
+  sort: SortState<K>;
+  onSort: (sort: SortState<K>) => void;
+  numeric?: boolean;
+}) {
+  const active = sort.key === column;
+  const nextDirection =
+    active && sort.direction === "asc" ? "desc" : "asc";
+  return (
+    <th
+      aria-sort={
+        active
+          ? sort.direction === "asc"
+            ? "ascending"
+            : "descending"
+          : "none"
+      }
+      className={numeric ? "numeric" : undefined}
+    >
+      <button
+        className={`table-sort ${active ? "active" : ""}`}
+        onClick={() => onSort({ key: column, direction: nextDirection })}
+        type="button"
+      >
+        <span>{label}</span>
+        {active ? (
+          sort.direction === "asc" ? (
+            <ArrowUp aria-hidden="true" size={14} />
+          ) : (
+            <ArrowDown aria-hidden="true" size={14} />
+          )
+        ) : (
+          <ArrowUpDown aria-hidden="true" size={14} />
+        )}
+      </button>
+    </th>
+  );
+}
+
 function MultiChoice<T extends string>({
   label,
   options,
@@ -273,35 +361,108 @@ function MultiChoice<T extends string>({
   onChange: (values: T[]) => void;
   allLabel?: string;
 }) {
+  const id = useId();
+  const root = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const summary =
     values.length === 0
       ? allLabel ?? `Semua ${label.toLowerCase()}`
       : values.length === 1
         ? values[0]
         : `${values.length} dipilih`;
+  const visibleOptions = options.filter((option) =>
+    option.toLowerCase().includes(query.trim().toLowerCase()),
+  );
+
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const onOtherFilter = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== id) setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("outbound-filter-open", onOtherFilter);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("outbound-filter-open", onOtherFilter);
+    };
+  }, [id]);
+
+  const toggle = useCallback(() => {
+    setOpen((current) => {
+      const next = !current;
+      if (next) {
+        window.dispatchEvent(
+          new CustomEvent("outbound-filter-open", { detail: id }),
+        );
+      }
+      return next;
+    });
+  }, [id]);
+
   return (
-    <details className="multi-choice">
-      <summary>
+    <div className={`multi-choice ${open ? "is-open" : ""}`} ref={root}>
+      <button
+        aria-controls={`${id}-panel`}
+        aria-expanded={open}
+        className="multi-choice-trigger"
+        onClick={toggle}
+        type="button"
+      >
         <span>{label}</span>
         <strong>{summary}</strong>
-      </summary>
-      <div className="multi-choice-popover">
+        <ChevronDown aria-hidden="true" size={18} />
+      </button>
+      {open && <div
+        aria-label={`Filter ${label}`}
+        className="multi-choice-popover"
+        id={`${id}-panel`}
+        role="dialog"
+      >
         <header>
           <span>{label}</span>
-          <button
-            className="btn btn-sm btn-ghost"
-            disabled={!values.length}
-            onClick={(event) => {
-              event.preventDefault();
-              onChange([]);
-            }}
-            type="button"
-          >
-            Reset
-          </button>
+          <div>
+            <button
+              className="btn btn-sm btn-ghost"
+              disabled={!visibleOptions.length}
+              onClick={() =>
+                onChange([...new Set([...values, ...visibleOptions])])
+              }
+              type="button"
+            >
+              Pilih tampil
+            </button>
+            <button
+              className="btn btn-sm btn-ghost"
+              disabled={!values.length}
+              onClick={() => onChange([])}
+              type="button"
+            >
+              Reset
+            </button>
+          </div>
         </header>
-        <div>
-          {options.map((option) => (
+        {options.length > 6 && (
+          <label className="multi-choice-search">
+            <Search aria-hidden="true" size={15} />
+            <input
+              aria-label={`Cari ${label}`}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Cari pilihan"
+              type="search"
+              value={query}
+            />
+          </label>
+        )}
+        <div className="multi-choice-options">
+          {visibleOptions.map((option) => (
             <label className="check-label" key={option}>
               <input
                 checked={values.includes(option)}
@@ -317,9 +478,12 @@ function MultiChoice<T extends string>({
               <span>{option}</span>
             </label>
           ))}
+          {!visibleOptions.length && (
+            <p className="empty-choice">Tidak ada pilihan yang cocok.</p>
+          )}
         </div>
-      </div>
-    </details>
+      </div>}
+    </div>
   );
 }
 
@@ -673,6 +837,9 @@ function ManualAssignmentModal({
     );
   const firstPicker = pickerOptions[0];
   const [pickerQuery, setPickerQuery] = useState("");
+  const [pickerSchedules, setPickerSchedules] = useState<string[]>([]);
+  const [pickerStatuses, setPickerStatuses] = useState<MpStatus[]>([]);
+  const [onlyEligible, setOnlyEligible] = useState(true);
   const [selectedPickerIds, setSelectedPickerIds] = useState<string[]>(
     firstPicker ? [firstPicker.id] : [],
   );
@@ -692,10 +859,21 @@ function ManualAssignmentModal({
     allowOverride: false,
     note: "",
   });
-  const visiblePickers = pickerOptions.filter((picker) =>
-    `${picker.id} ${picker.name} ${picker.scheduleDescription}`
-      .toLowerCase()
-      .includes(pickerQuery.trim().toLowerCase()),
+  const scheduleOptions = [
+    ...new Set(pickerOptions.map((picker) => picker.scheduleDescription)),
+  ]
+    .filter(Boolean)
+    .sort();
+  const visiblePickers = pickerOptions.filter(
+    (picker) =>
+      (!onlyEligible || isEligiblePicker(picker)) &&
+      (!pickerSchedules.length ||
+        pickerSchedules.includes(picker.scheduleDescription)) &&
+      (!pickerStatuses.length ||
+        pickerStatuses.includes(effectiveMpStatus(picker))) &&
+      `${picker.id} ${picker.name} ${picker.scheduleDescription}`
+        .toLowerCase()
+        .includes(pickerQuery.trim().toLowerCase()),
   );
   const scopedOrders = input.lockWholeSo
     ? data.orders.filter((order) =>
@@ -771,6 +949,18 @@ function ManualAssignmentModal({
     >
       <div className="manual-layout">
         <div className="form-stack">
+          <div className="manual-scope">
+            <Definition label="SO" value={groups.length} />
+            <Definition label="Split" value={scopedOrders.length} />
+            <Definition
+              label="Zona"
+              value={[...new Set(scopedOrders.map((order) => order.zone))].join(", ")}
+            />
+            <Definition
+              label="Shift"
+              value={[...new Set(scopedOrders.map((order) => order.shift))].join(", ")}
+            />
+          </div>
           <div className="picker-multi-select">
             <label>
               <span>Cari dan pilih picker</span>
@@ -782,6 +972,52 @@ function ManualAssignmentModal({
                 value={pickerQuery}
               />
             </label>
+            <div className="manual-picker-filters">
+              <MultiChoice
+                label="Jadwal"
+                onChange={setPickerSchedules}
+                options={scheduleOptions}
+                values={pickerSchedules}
+              />
+              <MultiChoice
+                label="Status MP"
+                onChange={setPickerStatuses}
+                options={mpOptions}
+                values={pickerStatuses}
+              />
+              <label className="check-label compact-check">
+                <input
+                  checked={onlyEligible}
+                  onChange={(event) => setOnlyEligible(event.target.checked)}
+                  type="checkbox"
+                />
+                Hanya picker siap
+              </label>
+            </div>
+            <div className="manual-picker-actions">
+              <button
+                className="btn btn-sm"
+                disabled={!visiblePickers.length}
+                onClick={() =>
+                  setSelectedPickerIds(
+                    visiblePickers
+                      .slice(0, Math.max(1, Math.min(groups.length, 6)))
+                      .map((picker) => picker.id),
+                  )
+                }
+                type="button"
+              >
+                Pilih kandidat terbaik
+              </button>
+              <button
+                className="btn btn-sm btn-ghost"
+                disabled={!selectedPickerIds.length}
+                onClick={() => setSelectedPickerIds([])}
+                type="button"
+              >
+                Kosongkan
+              </button>
+            </div>
             <div className="picker-option-list">
               {visiblePickers.slice(0, 60).map((picker) => (
                 <label className="picker-option" key={picker.id}>
@@ -799,6 +1035,17 @@ function ManualAssignmentModal({
                   <span>
                     <strong>{picker.name}</strong>
                     <small className="num">{picker.id} · {picker.scheduleDescription}</small>
+                    <small className="picker-option-meta">
+                      <span>{effectiveMpStatus(picker)}</span>
+                      <span>{picker.checkedIn ? "Check-in" : "Belum check-in"}</span>
+                      <span>
+                        {[...initialZones].every((zone) =>
+                          picker.zones.includes(zone),
+                        )
+                          ? "Zona cocok"
+                          : "Zona belum lengkap"}
+                      </span>
+                    </small>
                   </span>
                   <em>{Math.round(pickerLoadPct(picker, data.targetRules))}%</em>
                 </label>
@@ -836,7 +1083,7 @@ function ManualAssignmentModal({
               ["requireActive", "Harus aktif"],
               ["requireCheckIn", "Harus check-in"],
               ["requireRole", "Harus picker"],
-              ["requireShift", "Shift sama"],
+              ["requireShift", "Jadwal sesuai shift"],
               ["requireZone", "Skill zona cocok"],
               ["enforceCapacity", "Batas kapasitas"],
             ].map(([key, label]) => (
@@ -946,6 +1193,11 @@ function PlanningView({
   >(null);
   const [manualOrderIds, setManualOrderIds] = useState<string[] | null>(null);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<
+    SortState<
+      "so" | "destination" | "zone" | "routing" | "qty" | "picker"
+    >
+  >({ key: "routing", direction: "asc" });
   const pageSize = 30;
 
   const zones = useMemo(
@@ -974,8 +1226,8 @@ function PlanningView({
   };
   const eligible = useMemo(
     () =>
-      data.orders
-        .filter((order) => {
+      sortRows(
+        data.orders.filter((order) => {
           const term = query.trim().toLowerCase();
           return (
             order.pickerId === null &&
@@ -992,14 +1244,30 @@ function PlanningView({
                 .toLowerCase()
                 .includes(term))
           );
-        })
-        .sort(
-          (a, b) =>
-            compareRouteLabels(a.wave, b.wave) ||
-            compareRouteLabels(a.drop, b.drop) ||
-            a.soNumber.localeCompare(b.soNumber),
-        ),
-    [data.orders, drops, query, remarks, shifts, waves, zonesSelected],
+        }),
+        sort,
+        {
+          so: (order) => order.soNumber,
+          destination: (order) => order.destination,
+          zone: (order) => order.zone,
+          routing: (order) => `${order.wave} ${order.drop}`,
+          qty: (order) => order.requestQty,
+          picker: (order) =>
+            proposals.find((proposal) => proposal.orderId === order.id)
+              ?.pickerName ?? "",
+        },
+      ),
+    [
+      data.orders,
+      drops,
+      proposals,
+      query,
+      remarks,
+      shifts,
+      sort,
+      waves,
+      zonesSelected,
+    ],
   );
   const visiblePage = Math.min(
     page,
@@ -1117,12 +1385,12 @@ function PlanningView({
             <thead>
               <tr>
                 <th aria-label="Pilih" />
-                <th>Supply order</th>
-                <th>Tujuan</th>
-                <th>Zona</th>
-                <th>Routing</th>
-                <th className="numeric">Qty</th>
-                <th>Picker</th>
+                <SortableHeader column="so" label="Supply order" onSort={setSort} sort={sort} />
+                <SortableHeader column="destination" label="Tujuan" onSort={setSort} sort={sort} />
+                <SortableHeader column="zone" label="Zona" onSort={setSort} sort={sort} />
+                <SortableHeader column="routing" label="Routing" onSort={setSort} sort={sort} />
+                <SortableHeader column="qty" label="Qty" numeric onSort={setSort} sort={sort} />
+                <SortableHeader column="picker" label="Picker" onSort={setSort} sort={sort} />
                 <th>Aksi</th>
               </tr>
             </thead>
@@ -1323,9 +1591,22 @@ function PlanningView({
 }
 
 function ZonesView({ data }: { data: DemoDataset }) {
-  const zones = summarizeZones(data.orders, data.pickers);
+  const sourceZones = summarizeZones(data.orders, data.pickers);
   const metrics = aggregateMetrics(data.orders, data.pickers);
-  const [detail, setDetail] = useState<(typeof zones)[number] | null>(null);
+  const [sort, setSort] = useState<
+    SortState<"zone" | "status" | "wave" | "mp" | "so" | "request" | "remaining" | "progress">
+  >({ key: "remaining", direction: "desc" });
+  const zones = sortRows(sourceZones, sort, {
+    zone: (zone) => zone.zone,
+    status: (zone) => zone.state,
+    wave: (zone) => zone.waves.join(" "),
+    mp: (zone) => zone.activeMp,
+    so: (zone) => zone.totalSo,
+    request: (zone) => zone.requestQty,
+    remaining: (zone) => zone.remainingQty,
+    progress: (zone) => zone.completionPct,
+  });
+  const [detail, setDetail] = useState<(typeof sourceZones)[number] | null>(null);
   return (
     <>
       <PageHeader
@@ -1364,14 +1645,14 @@ function ZonesView({ data }: { data: DemoDataset }) {
           <table className="tbl">
             <thead>
               <tr>
-                <th>Zona / area</th>
-                <th>Status</th>
-                <th>Wave</th>
-                <th className="numeric">MP</th>
-                <th className="numeric">SO / split</th>
-                <th className="numeric">Request</th>
-                <th className="numeric">Sisa</th>
-                <th>Progres</th>
+                <SortableHeader column="zone" label="Zona / area" onSort={setSort} sort={sort} />
+                <SortableHeader column="status" label="Status" onSort={setSort} sort={sort} />
+                <SortableHeader column="wave" label="Wave" onSort={setSort} sort={sort} />
+                <SortableHeader column="mp" label="MP" numeric onSort={setSort} sort={sort} />
+                <SortableHeader column="so" label="SO / split" numeric onSort={setSort} sort={sort} />
+                <SortableHeader column="request" label="Request" numeric onSort={setSort} sort={sort} />
+                <SortableHeader column="remaining" label="Sisa" numeric onSort={setSort} sort={sort} />
+                <SortableHeader column="progress" label="Progres" onSort={setSort} sort={sort} />
                 <th>Aksi</th>
               </tr>
             </thead>
@@ -1421,6 +1702,176 @@ function ZonesView({ data }: { data: DemoDataset }) {
   );
 }
 
+function ProductivityTrend({
+  data,
+  pickerIds,
+}: {
+  data: DemoDataset;
+  pickerIds: Set<string>;
+}) {
+  const [grain, setGrain] = useState<"daily" | "hourly">("daily");
+  const [metric, setMetric] = useState<"avgPicker" | "perSo" | "perSku">(
+    "avgPicker",
+  );
+  const [days, setDays] = useState(14);
+  const availableDates = [
+    ...new Set(data.pickerProductivity.map((point) => point.date)),
+  ].sort();
+  const selectedDates = new Set(availableDates.slice(-days));
+  const points = data.pickerProductivity.filter(
+    (point) =>
+      selectedDates.has(point.date) &&
+      (!pickerIds.size || pickerIds.has(point.pickerId)),
+  );
+  const grouped = new Map<
+    string,
+    {
+      qty: number;
+      so: number;
+      sku: number;
+      pickerUnits: Set<string>;
+    }
+  >();
+  points.forEach((point) => {
+    const key = grain === "daily" ? point.date : point.hour;
+    const bucket = grouped.get(key) ?? {
+      qty: 0,
+      so: 0,
+      sku: 0,
+      pickerUnits: new Set<string>(),
+    };
+    bucket.qty += point.pickedQty;
+    bucket.so += point.soCount;
+    bucket.sku += point.skuCount;
+    bucket.pickerUnits.add(
+      grain === "daily"
+        ? point.pickerId
+        : `${point.date}:${point.pickerId}`,
+    );
+    grouped.set(key, bucket);
+  });
+  const rows = [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, bucket]) => ({
+      key,
+      label:
+        grain === "daily"
+          ? new Intl.DateTimeFormat("id-ID", {
+              day: "2-digit",
+              month: "short",
+            }).format(new Date(`${key}T00:00:00+07:00`))
+          : `${key}:00`,
+      value:
+        metric === "avgPicker"
+          ? bucket.qty / Math.max(1, bucket.pickerUnits.size)
+          : metric === "perSo"
+            ? bucket.qty / Math.max(1, bucket.so)
+            : bucket.qty / Math.max(1, bucket.sku),
+      qty: bucket.qty,
+      pickerCount: bucket.pickerUnits.size,
+    }));
+  const max = Math.max(1, ...rows.map((row) => row.value));
+  const average =
+    rows.reduce((sum, row) => sum + row.value, 0) / Math.max(1, rows.length);
+  const metricLabel =
+    metric === "avgPicker"
+      ? "Avg qty / picker"
+      : metric === "perSo"
+        ? "Avg qty / SO"
+        : "Avg qty / SKU";
+
+  return (
+    <Section
+      eyebrow={`${points.length} observasi picker`}
+      title="Produktivitas dinamis"
+      action={
+        <div className="chart-controls">
+          <div className="segmented-control" aria-label="Grain produktivitas">
+            <button
+              className={grain === "daily" ? "active" : ""}
+              onClick={() => setGrain("daily")}
+              type="button"
+            >
+              Harian
+            </button>
+            <button
+              className={grain === "hourly" ? "active" : ""}
+              onClick={() => setGrain("hourly")}
+              type="button"
+            >
+              Per jam
+            </button>
+          </div>
+          <select
+            aria-label="Metrik produktivitas"
+            className="input compact-input"
+            onChange={(event) =>
+              setMetric(event.target.value as typeof metric)
+            }
+            value={metric}
+          >
+            <option value="avgPicker">Avg qty / picker</option>
+            <option value="perSo">Avg qty / SO</option>
+            <option value="perSku">Avg qty / SKU</option>
+          </select>
+          <select
+            aria-label="Rentang hari produktivitas"
+            className="input compact-input"
+            onChange={(event) => setDays(Number(event.target.value))}
+            value={days}
+          >
+            <option value={7}>7 hari</option>
+            <option value={14}>14 hari</option>
+            <option value={31}>Bulan berjalan</option>
+          </select>
+        </div>
+      }
+    >
+      <div className="productivity-chart-summary">
+        <span>
+          <small>Rata-rata periode</small>
+          <strong className="num">{average.toFixed(1)}</strong>
+        </span>
+        <span>
+          <small>Metrik</small>
+          <strong>{metricLabel}</strong>
+        </span>
+        <span>
+          <small>Cakupan</small>
+          <strong>{selectedDates.size} hari</strong>
+        </span>
+      </div>
+      {rows.length ? (
+        <div
+          aria-label={`${metricLabel} ${grain === "daily" ? "harian" : "per jam"}`}
+          className={`productivity-trend is-${grain}`}
+        >
+          {rows.map((row) => (
+            <div className="productivity-bar" key={row.key}>
+              <strong className="num">{row.value.toFixed(0)}</strong>
+              <span
+                style={{ height: `${Math.max(5, (row.value / max) * 100)}%` }}
+              />
+              <small>{row.label}</small>
+              <em className="num">
+                {number.format(row.qty)} qty · {row.pickerCount} picker
+              </em>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="empty-state">
+          Belum ada picking_end_at dan picking_staff_id untuk membentuk tren.
+        </p>
+      )}
+      <p className="section-note">
+        Nilai per jam membagi output dengan picker-hari aktif pada jam yang sama;
+        nilai harian membagi output dengan picker aktif pada tanggal tersebut.
+      </p>
+    </Section>
+  );
+}
+
 function PeopleView({
   data,
   onPickerUpdate,
@@ -1430,61 +1881,95 @@ function PeopleView({
   onPickerUpdate: (picker: Picker) => void;
   onTargetUpdate: (rule: TargetRule) => void;
 }) {
-  const [status, setStatus] = useState<MpStatus | "ALL">("ALL");
-  const [shift, setShift] = useState<ShiftCode | "ALL">("ALL");
+  const [statuses, setStatuses] = useState<MpStatus[]>([]);
+  const [shifts, setShifts] = useState<ShiftCode[]>([]);
   const [onlyEligible, setOnlyEligible] = useState(false);
   const [draft, setDraft] = useState<Picker | null>(null);
+  const [rosterSort, setRosterSort] = useState<
+    SortState<
+      "picker" | "status" | "attendance" | "shift" | "zone" | "target" | "load"
+    >
+  >({ key: "attendance", direction: "desc" });
+  const [topSort, setTopSort] = useState<
+    SortState<"picker" | "duration" | "perHour" | "perDay" | "perSku" | "perSo">
+  >({ key: "perHour", direction: "desc" });
   const sorted = useMemo(
     () =>
-      data.pickers
-        .filter(
+      sortRows(
+        data.pickers.filter(
           (picker) =>
-            (status === "ALL" || effectiveMpStatus(picker) === status) &&
-            (shift === "ALL" || picker.shift === shift) &&
+            (!statuses.length ||
+              statuses.includes(effectiveMpStatus(picker))) &&
+            (!shifts.length || shifts.includes(picker.shift)) &&
             (!onlyEligible || isEligiblePicker(picker)),
-        )
-        .sort(
-          (a, b) =>
-            Number(isEligiblePicker(b)) - Number(isEligiblePicker(a)) ||
-            pickerLoadPct(b, data.targetRules) -
-              pickerLoadPct(a, data.targetRules) ||
-            a.name.localeCompare(b.name, "id"),
         ),
-    [data.pickers, data.targetRules, onlyEligible, shift, status],
+        rosterSort,
+        {
+          picker: (picker) => picker.name,
+          status: (picker) => effectiveMpStatus(picker),
+          attendance: (picker) => isEligiblePicker(picker),
+          shift: (picker) => picker.scheduleDescription || picker.shift,
+          zone: (picker) => picker.zones.join(" "),
+          target: (picker) => effectiveTarget(picker, data.targetRules),
+          load: (picker) => pickerLoadPct(picker, data.targetRules),
+        },
+      ),
+    [
+      data.pickers,
+      data.targetRules,
+      onlyEligible,
+      rosterSort,
+      shifts,
+      statuses,
+    ],
+  );
+  const filteredPickerIds = useMemo(
+    () => new Set(sorted.map((picker) => picker.id)),
+    [sorted],
+  );
+  const productivityRows = useMemo(
+    () =>
+      sortRows(
+        sorted
+          .filter((picker) => picker.role === "OUTBOUND_PICKER_STAFF")
+          .map((picker) => {
+            const assignedOrders = data.orders.filter(
+              (order) => order.pickerId === picker.id,
+            );
+            const skuCount = assignedOrders.reduce(
+              (sum, order) => sum + order.skuCount,
+              0,
+            );
+            const soCount = new Set(
+              assignedOrders.map((order) => order.soNumber),
+            ).size;
+            return {
+              picker,
+              duration: picker.activeHours,
+              perHour: picker.pickedQty / Math.max(1, picker.activeHours),
+              perDay: picker.pickedQty,
+              skuCount,
+              soCount,
+              perSku: picker.pickedQty / Math.max(1, skuCount),
+              perSo: picker.pickedQty / Math.max(1, soCount),
+            };
+          }),
+        topSort,
+        {
+          picker: (row) => row.picker.name,
+          duration: (row) => row.duration,
+          perHour: (row) => row.perHour,
+          perDay: (row) => row.perDay,
+          perSku: (row) => row.perSku,
+          perSo: (row) => row.perSo,
+        },
+      ),
+    [data.orders, sorted, topSort],
   );
   const pickerCount = data.pickers.filter(
     (picker) => picker.role === "OUTBOUND_PICKER_STAFF",
   ).length;
   const eligibleCount = data.pickers.filter(isEligiblePicker).length;
-  const productivityRows = useMemo(
-    () =>
-      sorted
-        .filter((picker) => picker.role === "OUTBOUND_PICKER_STAFF")
-        .map((picker) => {
-          const assignedOrders = data.orders.filter(
-            (order) => order.pickerId === picker.id,
-          );
-          const skuCount = assignedOrders.reduce(
-            (sum, order) => sum + order.skuCount,
-            0,
-          );
-          const soCount = new Set(
-            assignedOrders.map((order) => order.soNumber),
-          ).size;
-          return {
-            picker,
-            duration: picker.activeHours,
-            perHour: picker.pickedQty / Math.max(1, picker.activeHours),
-            perDay: picker.pickedQty,
-            skuCount,
-            soCount,
-            perSku: picker.pickedQty / Math.max(1, skuCount),
-            perSo: picker.pickedQty / Math.max(1, soCount),
-          };
-        })
-        .sort((a, b) => b.perHour - a.perHour),
-    [data.orders, sorted],
-  );
   const topPickers = productivityRows.slice(0, 10);
   const onDuty = data.pickers.filter(
     (picker) =>
@@ -1527,20 +2012,18 @@ function PeopleView({
       />
       <DataBanner message="Skill zona diatur di sini dan tetap tersimpan saat data staff diperbarui." />
       <div className="filter-bar compact-filter">
-        <label>
-          <span>MP status</span>
-          <select className="input" onChange={(event) => setStatus(event.target.value as MpStatus | "ALL")} value={status}>
-            <option value="ALL">Semua status</option>
-            {mpOptions.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Shift</span>
-          <select className="input" onChange={(event) => setShift(event.target.value as ShiftCode | "ALL")} value={shift}>
-            <option value="ALL">Semua shift</option>
-            {shiftOptions.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </label>
+        <MultiChoice
+          label="Status MP"
+          onChange={setStatuses}
+          options={mpOptions}
+          values={statuses}
+        />
+        <MultiChoice
+          label="Shift"
+          onChange={setShifts}
+          options={shiftOptions}
+          values={shifts}
+        />
         <label className="check-label">
           <input checked={onlyEligible} onChange={(event) => setOnlyEligible(event.target.checked)} type="checkbox" />
           Hanya yang siap
@@ -1553,6 +2036,8 @@ function PeopleView({
         <KpiCard label="Produktivitas" value={`${avgPerHour.toFixed(0)} unit/jam`} sub="Rata-rata picker" />
         <KpiCard label="Output hari ini" value={number.format(totalOutput)} sub="Unit selesai pick" tone="normal" />
       </section>
+
+      <ProductivityTrend data={data} pickerIds={filteredPickerIds} />
 
       <div className="dashboard-grid dashboard-grid-main productivity-grid">
         <Section eyebrow="Kehadiran aktif" title="Picker on duty">
@@ -1579,12 +2064,12 @@ function PeopleView({
             <table className="tbl productivity-table">
               <thead>
                 <tr>
-                  <th>Picker</th>
-                  <th className="numeric">Durasi</th>
-                  <th className="numeric">Unit/jam</th>
-                  <th className="numeric">Per hari</th>
-                  <th className="numeric">Per SKU</th>
-                  <th className="numeric">Per SO</th>
+                  <SortableHeader column="picker" label="Picker" onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="duration" label="Durasi" numeric onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="perHour" label="Unit/jam" numeric onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="perDay" label="Per hari" numeric onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="perSku" label="Per SKU" numeric onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="perSo" label="Per SO" numeric onSort={setTopSort} sort={topSort} />
                 </tr>
               </thead>
               <tbody>
@@ -1653,13 +2138,13 @@ function PeopleView({
           <table className="tbl">
             <thead>
               <tr>
-                <th>Picker</th>
-                <th>Status</th>
-                <th>Attendance</th>
-                <th>Shift</th>
-                <th>Skill zona</th>
-                <th className="numeric">Target</th>
-                <th>Load</th>
+                <SortableHeader column="picker" label="Picker" onSort={setRosterSort} sort={rosterSort} />
+                <SortableHeader column="status" label="Status" onSort={setRosterSort} sort={rosterSort} />
+                <SortableHeader column="attendance" label="Kesiapan" onSort={setRosterSort} sort={rosterSort} />
+                <SortableHeader column="shift" label="Jadwal" onSort={setRosterSort} sort={rosterSort} />
+                <SortableHeader column="zone" label="Skill zona" onSort={setRosterSort} sort={rosterSort} />
+                <SortableHeader column="target" label="Target" numeric onSort={setRosterSort} sort={rosterSort} />
+                <SortableHeader column="load" label="Load" onSort={setRosterSort} sort={rosterSort} />
                 <th>Aksi</th>
               </tr>
             </thead>
@@ -1730,6 +2215,61 @@ function PeopleView({
   );
 }
 
+function SkuDetailTable({
+  rows,
+}: {
+  rows: DemoDataset["orders"][number]["skuDetails"];
+}) {
+  const [sort, setSort] = useState<
+    SortState<"sku" | "product" | "request" | "picked" | "remaining" | "progress">
+  >({ key: "request", direction: "desc" });
+  const sorted = sortRows(rows, sort, {
+    sku: (sku) => sku.skuNumber,
+    product: (sku) => sku.productName,
+    request: (sku) => sku.requestQty,
+    picked: (sku) => sku.pickedQty,
+    remaining: (sku) => Math.max(0, sku.requestQty - sku.pickedQty),
+    progress: (sku) =>
+      sku.requestQty ? (sku.pickedQty / sku.requestQty) * 100 : 0,
+  });
+  return (
+    <div className="table-scroll">
+      <table className="tbl">
+        <thead>
+          <tr>
+            <SortableHeader column="sku" label="SKU" onSort={setSort} sort={sort} />
+            <SortableHeader column="product" label="Produk" onSort={setSort} sort={sort} />
+            <SortableHeader column="request" label="Request" numeric onSort={setSort} sort={sort} />
+            <SortableHeader column="picked" label="Picked" numeric onSort={setSort} sort={sort} />
+            <SortableHeader column="remaining" label="Sisa" numeric onSort={setSort} sort={sort} />
+            <SortableHeader column="progress" label="Progres" onSort={setSort} sort={sort} />
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((sku) => {
+            const pct = sku.requestQty
+              ? (sku.pickedQty / sku.requestQty) * 100
+              : 0;
+            return (
+              <tr key={`${sku.skuNumber}-${sku.productId}`}>
+                <th scope="row"><strong className="num">{sku.skuNumber || "-"}</strong><small className="num">{sku.productId || "-"}</small></th>
+                <td>{sku.productName || "Nama produk tidak tersedia"}</td>
+                <td className="numeric num">{number.format(sku.requestQty)}</td>
+                <td className="numeric num">{number.format(sku.pickedQty)}</td>
+                <td className="numeric num">{number.format(Math.max(0, sku.requestQty - sku.pickedQty))}</td>
+                <td><span className="progress-cell"><ProgressBar label={`${sku.skuNumber} progress`} tone={toneForCompletion(pct) as "normal" | "warning" | "critical"} value={pct} /><b className="num">{pct.toFixed(0)}%</b></span></td>
+              </tr>
+            );
+          })}
+          {!sorted.length && (
+            <tr><td colSpan={6}>Detail SKU belum tersedia. Jalankan sync untuk memperbarui.</td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function OrdersView({ data }: { data: DemoDataset }) {
   const routing = dynamicRoutingOptions(data);
   const statusOptions = [...new Set(data.orders.map((order) => order.status))].sort();
@@ -1748,11 +2288,16 @@ function OrdersView({ data }: { data: DemoDataset }) {
   const [toDate, setToDate] = useState("");
   const [detail, setDetail] = useState<(typeof data.orders)[number] | null>(null);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<
+    SortState<
+      "so" | "status" | "destination" | "zone" | "routing" | "sku" | "picker" | "request" | "remaining" | "progress"
+    >
+  >({ key: "so", direction: "desc" });
   const pageSize = 50;
   const zones = useMemo(() => [...new Set(data.orders.map((order) => order.zone))].sort(), [data.orders]);
   const filtered = useMemo(
     () =>
-      data.orders.filter((order) => {
+      sortRows(data.orders.filter((order) => {
         const term = query.trim().toLowerCase();
         const createdDate = order.createdAt.slice(0, 10);
         const haystack =
@@ -1772,8 +2317,19 @@ function OrdersView({ data }: { data: DemoDataset }) {
           (!fromDate || createdDate >= fromDate) &&
           (!toDate || createdDate <= toDate)
         );
+      }), sort, {
+        so: (order) => order.soNumber,
+        status: (order) => order.status,
+        destination: (order) => order.destination,
+        zone: (order) => order.zone,
+        routing: (order) => `${order.wave} ${order.drop}`,
+        sku: (order) => order.skuCount,
+        picker: (order) => order.pickerId ?? "",
+        request: (order) => order.requestQty,
+        remaining: (order) => remainingQty(order),
+        progress: (order) => completionPct(order),
       }),
-    [assignmentStates, data.orders, drops, fromDate, priorities, query, remarks, shifts, statuses, toDate, waves, zonesSelected],
+    [assignmentStates, data.orders, drops, fromDate, priorities, query, remarks, shifts, sort, statuses, toDate, waves, zonesSelected],
   );
   const visiblePage = Math.min(page, Math.max(1, Math.ceil(filtered.length / pageSize)));
   const visibleOrders = filtered.slice((visiblePage - 1) * pageSize, visiblePage * pageSize);
@@ -1803,7 +2359,19 @@ function OrdersView({ data }: { data: DemoDataset }) {
       <Section eyebrow={`${new Set(filtered.map((order) => order.soNumber)).size} SO · ${filtered.length} split`} title="Index SO × zona">
         <div className="table-scroll">
           <table className="tbl">
-            <thead><tr><th>Supply order</th><th>Status</th><th>Tujuan</th><th>Zona / area</th><th>Routing</th><th>SKU / remark</th><th>Picker</th><th className="numeric">Request</th><th className="numeric">Sisa</th><th>Progres</th><th>Aksi</th></tr></thead>
+            <thead><tr>
+              <SortableHeader column="so" label="Supply order" onSort={setSort} sort={sort} />
+              <SortableHeader column="status" label="Status" onSort={setSort} sort={sort} />
+              <SortableHeader column="destination" label="Tujuan" onSort={setSort} sort={sort} />
+              <SortableHeader column="zone" label="Zona / area" onSort={setSort} sort={sort} />
+              <SortableHeader column="routing" label="Routing" onSort={setSort} sort={sort} />
+              <SortableHeader column="sku" label="SKU / remark" onSort={setSort} sort={sort} />
+              <SortableHeader column="picker" label="Picker" onSort={setSort} sort={sort} />
+              <SortableHeader column="request" label="Request" numeric onSort={setSort} sort={sort} />
+              <SortableHeader column="remaining" label="Sisa" numeric onSort={setSort} sort={sort} />
+              <SortableHeader column="progress" label="Progres" onSort={setSort} sort={sort} />
+              <th>Aksi</th>
+            </tr></thead>
             <tbody>
               {visibleOrders.map((order) => {
                 const pct = completionPct(order);
@@ -1844,31 +2412,7 @@ function OrdersView({ data }: { data: DemoDataset }) {
           <div className="detail-subsection">
             <span className="eyebrow">{(detail.skuDetails ?? []).length} SKU</span>
             <h3>Detail SKU</h3>
-            <div className="table-scroll">
-              <table className="tbl">
-                <thead><tr><th>SKU</th><th>Produk</th><th className="numeric">Request</th><th className="numeric">Picked</th><th className="numeric">Sisa</th><th>Progres</th></tr></thead>
-                <tbody>
-                  {(detail.skuDetails ?? []).map((sku) => {
-                    const pct = sku.requestQty
-                      ? (sku.pickedQty / sku.requestQty) * 100
-                      : 0;
-                    return (
-                      <tr key={`${sku.skuNumber}-${sku.productId}`}>
-                        <th scope="row"><strong className="num">{sku.skuNumber || "-"}</strong><small className="num">{sku.productId || "-"}</small></th>
-                        <td>{sku.productName || "Nama produk tidak tersedia"}</td>
-                        <td className="numeric num">{number.format(sku.requestQty)}</td>
-                        <td className="numeric num">{number.format(sku.pickedQty)}</td>
-                        <td className="numeric num">{number.format(Math.max(0, sku.requestQty - sku.pickedQty))}</td>
-                        <td><span className="progress-cell"><ProgressBar label={`${sku.skuNumber} progress`} tone={toneForCompletion(pct) as "normal" | "warning" | "critical"} value={pct} /><b className="num">{pct.toFixed(0)}%</b></span></td>
-                      </tr>
-                    );
-                  })}
-                  {!(detail.skuDetails ?? []).length && (
-                    <tr><td colSpan={6}>Detail SKU belum tersedia pada snapshot lama. Jalankan sync untuk memperbarui.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <SkuDetailTable rows={detail.skuDetails ?? []} />
           </div>
         </Modal>
       )}
@@ -1884,9 +2428,21 @@ function CheckerView({
   onStatus: (routeId: string, state: CheckerState) => void;
 }) {
   const [rate, setRate] = useState(776);
+  const [sort, setSort] = useState<
+    SortState<"route" | "wave" | "status" | "worker" | "qty" | "station" | "deadline">
+  >({ key: "deadline", direction: "asc" });
   const totalQty = data.checkerRoutes.filter((route) => route.status !== "DONE").reduce((sum, route) => sum + route.quantity, 0);
   const stations = requiredStations(totalQty, rate);
   const overdue = data.checkerRoutes.filter((route) => route.status === "OVERDUE").length;
+  const routes = sortRows(data.checkerRoutes, sort, {
+    route: (route) => route.route,
+    wave: (route) => route.wave,
+    status: (route) => route.status,
+    worker: (route) => route.worker ?? "",
+    qty: (route) => route.quantity,
+    station: (route) => requiredStations(route.quantity, rate),
+    deadline: (route) => route.deadline,
+  });
   return (
     <>
       <PageHeader eyebrow="Checker" title="Kebutuhan station" description="Hitung station dan pantau route yang menunggu, berjalan, terlambat, atau selesai." />
@@ -1905,8 +2461,17 @@ function CheckerView({
       <Section eyebrow={`${data.checkerRoutes.length} route`} title="Route checker">
         <div className="table-scroll">
           <table className="tbl">
-            <thead><tr><th>Route</th><th>Wave</th><th>Status</th><th>Worker</th><th className="numeric">Qty</th><th className="numeric">Station</th><th>Deadline</th><th>Aksi</th></tr></thead>
-            <tbody>{data.checkerRoutes.map((route) => (
+            <thead><tr>
+              <SortableHeader column="route" label="Route" onSort={setSort} sort={sort} />
+              <SortableHeader column="wave" label="Wave" onSort={setSort} sort={sort} />
+              <SortableHeader column="status" label="Status" onSort={setSort} sort={sort} />
+              <SortableHeader column="worker" label="Worker" onSort={setSort} sort={sort} />
+              <SortableHeader column="qty" label="Qty" numeric onSort={setSort} sort={sort} />
+              <SortableHeader column="station" label="Station" numeric onSort={setSort} sort={sort} />
+              <SortableHeader column="deadline" label="Deadline" onSort={setSort} sort={sort} />
+              <th>Aksi</th>
+            </tr></thead>
+            <tbody>{routes.map((route) => (
               <tr key={route.id}>
                 <th scope="row"><strong>{route.route}</strong><small className="num">{route.id} · {route.updatedAt}</small></th>
                 <td><span className="chip chip-accent">{route.wave}</span></td>
@@ -1981,7 +2546,7 @@ function ReportsView({ data }: { data: DemoDataset }) {
   );
 }
 
-function ConnectorSettings() {
+function ConnectorSettings({ data }: { data: DemoDataset }) {
   const { refresh, phase } = useOutbound();
   const [config, setConfig] = useState<ConnectorPublicConfig | null>(null);
   const [form, setForm] = useState({
@@ -1990,6 +2555,9 @@ function ConnectorSettings() {
     staffSliceId: "",
     cookie: "",
     refreshIntervalMinutes: 5,
+    warehouseCode: "CBT",
+    warehouseName: "CBT - WH Cibitung",
+    warehouseTimezone: "Asia/Jakarta",
   });
   const [feedback, setFeedback] = useState("");
   const [saving, setSaving] = useState(false);
@@ -2023,15 +2591,22 @@ function ConnectorSettings() {
           refreshIntervalMinutes:
             payload.config?.refreshIntervalMinutes ??
             current.refreshIntervalMinutes,
+          warehouseCode: payload.config?.warehouseCode ?? "CBT",
+          warehouseName:
+            payload.config?.warehouseName ?? "CBT - WH Cibitung",
+          warehouseTimezone:
+            payload.config?.warehouseTimezone ?? "Asia/Jakarta",
         }));
       })
       .catch((caught) => {
         if (!active) return;
         setLoadStatus("unavailable");
         setFeedback(
-          caught instanceof Error
-            ? caught.message
-            : "Status koneksi belum dapat dibaca.",
+          caught instanceof TypeError && /fetch/i.test(caught.message)
+            ? "Server lokal tidak terhubung. Pastikan npm run start tetap berjalan."
+            : caught instanceof Error
+              ? caught.message
+              : "Status koneksi belum dapat dibaca.",
         );
       });
     return () => {
@@ -2089,9 +2664,18 @@ function ConnectorSettings() {
           </div>
           <label><span>Cookie Superset</span><textarea autoComplete="off" className="input num" onChange={(event) => setForm({ ...form, cookie: event.target.value })} placeholder={config?.cookiePresent ? "Kosongkan bila cookie belum berubah" : "Tempel nilai header Cookie"} rows={3} value={form.cookie} /><small>Cookie dienkripsi dan tidak pernah ditampilkan kembali.</small></label>
           <label><span>Refresh otomatis</span><select className="input" onChange={(event) => setForm({ ...form, refreshIntervalMinutes: Number(event.target.value) })} value={form.refreshIntervalMinutes}>{[1, 2, 3, 5, 10, 15, 30, 60].map((minute) => <option key={minute} value={minute}>Setiap {minute} menit</option>)}</select></label>
+          <fieldset className="warehouse-fieldset">
+            <legend>Profil warehouse</legend>
+            <p>Identitas ini ikut pada snapshot agar ekspansi tidak mencampur konteks operasi.</p>
+            <div className="form-grid">
+              <label><span>Kode</span><input className="input num" maxLength={16} onChange={(event) => setForm({ ...form, warehouseCode: event.target.value.toUpperCase() })} value={form.warehouseCode} /></label>
+              <label><span>Nama warehouse</span><input className="input" onChange={(event) => setForm({ ...form, warehouseName: event.target.value })} value={form.warehouseName} /></label>
+              <label className="form-span"><span>Zona waktu</span><select className="input" onChange={(event) => setForm({ ...form, warehouseTimezone: event.target.value })} value={form.warehouseTimezone}><option value="Asia/Jakarta">Asia/Jakarta (WIB)</option><option value="Asia/Makassar">Asia/Makassar (WITA)</option><option value="Asia/Jayapura">Asia/Jayapura (WIT)</option></select></label>
+            </div>
+          </fieldset>
           <div className="page-action-row">
             <button className="btn" disabled={saving} onClick={() => void save()} type="button">{saving ? "Menyimpan…" : "Simpan koneksi"}</button>
-            <button className="btn btn-primary" disabled={phase === "syncing"} onClick={() => void refresh({ forceSource: true })} type="button">{phase === "syncing" ? "Menyinkronkan…" : "Uji & sync sekarang"}</button>
+            <button className="btn btn-primary" disabled={phase === "syncing"} onClick={() => void refresh({ forceSource: true, sourceMode: "manual" })} type="button">{phase === "syncing" ? "Menyinkronkan…" : "Uji dan tarik data"}</button>
           </div>
           {feedback && <p className="section-note">{feedback}</p>}
         </div>
@@ -2103,10 +2687,40 @@ function ConnectorSettings() {
             <div><dt>Terakhir diperbarui</dt><dd>{config?.cookieUpdatedAt ? new Date(config.cookieUpdatedAt).toLocaleString("id-ID") : "-"}</dd></div>
             <div><dt>Terakhir sync</dt><dd>{config?.lastRunAt ? new Date(config.lastRunAt).toLocaleString("id-ID") : "-"}</dd></div>
             <div><dt>Refresh</dt><dd>Setiap {config?.refreshIntervalMinutes ?? form.refreshIntervalMinutes} menit</dd></div>
+            <div><dt>Warehouse</dt><dd>{config?.warehouseCode ?? form.warehouseCode} · {config?.warehouseTimezone ?? form.warehouseTimezone}</dd></div>
             <div><dt>Hasil</dt><dd>{config?.lastMessage ?? "-"}</dd></div>
           </dl>
-          <p>Sync mengambil dua slice secara paralel, menyimpan snapshot cepat, dan mencegah proses ganda antar-tab. Ganti cookie hanya saat sesi Superset berakhir.</p>
+          <p>Refresh otomatis hanya menarik ulang Superset ketika snapshot melewati interval. Refresh lain cukup memeriksa versinya, sehingga banyak tab tidak menggandakan beban sumber.</p>
         </aside>
+      </div>
+      <div className="superset-filter-contract">
+        <div>
+          <span className="eyebrow">Baseline dari Superset</span>
+          <strong>Filter chart tersimpan tetap menjadi sumber utama</strong>
+          <p>Slice ID memakai query context yang disimpan pada chart. Filter halaman web hanya mempersempit snapshot dan tidak mengubah chart Superset.</p>
+        </div>
+        <div>
+          <strong>Slice SO</strong>
+          {(data.sourceProfile.savedChartFilters?.so.length
+            ? data.sourceProfile.savedChartFilters.so
+            : ["Metadata filter belum tersedia; sync JSON berikutnya akan membacanya."]
+          ).map((filter) => <span className="chip" key={filter}>{filter}</span>)}
+        </div>
+        <div>
+          <strong>Slice staff</strong>
+          {(data.sourceProfile.savedChartFilters?.staff.length
+            ? data.sourceProfile.savedChartFilters.staff
+            : ["Metadata filter belum tersedia; filter chart tetap dipakai oleh Superset."]
+          ).map((filter) => <span className="chip" key={filter}>{filter}</span>)}
+        </div>
+        {(data.sourceProfile.savedChartFilters?.rejected.length ?? 0) > 0 && (
+          <div className="filter-rejected">
+            <strong>Filter ditolak Superset</strong>
+            {data.sourceProfile.savedChartFilters?.rejected.map((filter) => (
+              <span className="chip" key={filter}>{filter}</span>
+            ))}
+          </div>
+        )}
       </div>
     </Section>
   );
@@ -2121,6 +2735,9 @@ function SettingsView({
 }) {
   const routing = dynamicRoutingOptions(data);
   const [draft, setDraft] = useState<DestinationRule | null>(null);
+  const [sort, setSort] = useState<
+    SortState<"destination" | "month" | "wave" | "drop" | "sequence" | "status">
+  >({ key: "sequence", direction: "asc" });
   const destinations = useMemo(
     () =>
       [...new Map(data.orders.map((order) => [order.destinationCode, order.destination])).entries()]
@@ -2137,6 +2754,14 @@ function SettingsView({
   const destinationsNeedingRules = destinations.filter(
     (destination) => !configuredDestinations.has(destination.code),
   );
+  const sortedRules = sortRows(data.destinationRules, sort, {
+    destination: (rule) => `${rule.destinationCode} ${rule.destinationName}`,
+    month: (rule) => rule.effectiveMonth,
+    wave: (rule) => rule.wave,
+    drop: (rule) => rule.drop,
+    sequence: (rule) => rule.sequence,
+    status: (rule) => rule.active,
+  });
 
   function createRule(selectedDestination?: { code: string; name: string }) {
     const destination = selectedDestination ??
@@ -2162,7 +2787,7 @@ function SettingsView({
         title="Konfigurasi"
         description="Atur koneksi data dan routing tujuan."
       />
-      <ConnectorSettings />
+      <ConnectorSettings data={data} />
       <Section
         eyebrow="Berlaku per bulan"
         title="Routing tujuan"
@@ -2201,9 +2826,17 @@ function SettingsView({
         </div>
         <div className="table-scroll">
           <table className="tbl">
-            <thead><tr><th>Tujuan</th><th>Bulan</th><th>Wave</th><th>Drop</th><th className="numeric">Urutan</th><th>Status</th><th>Aksi</th></tr></thead>
+            <thead><tr>
+              <SortableHeader column="destination" label="Tujuan" onSort={setSort} sort={sort} />
+              <SortableHeader column="month" label="Bulan" onSort={setSort} sort={sort} />
+              <SortableHeader column="wave" label="Wave" onSort={setSort} sort={sort} />
+              <SortableHeader column="drop" label="Drop" onSort={setSort} sort={sort} />
+              <SortableHeader column="sequence" label="Urutan" numeric onSort={setSort} sort={sort} />
+              <SortableHeader column="status" label="Status" onSort={setSort} sort={sort} />
+              <th>Aksi</th>
+            </tr></thead>
             <tbody>
-              {data.destinationRules.map((rule) => (
+              {sortedRules.map((rule) => (
                 <tr key={rule.id}>
                   <th scope="row"><strong>{rule.destinationName}</strong><small className="num">{rule.destinationCode}</small></th>
                   <td className="num">{rule.effectiveMonth}</td>
@@ -2249,15 +2882,21 @@ function SettingsView({
 
 const guideSteps = [
   {
+    title: "Jalankan aplikasi",
+    summary: "Build sekali, lalu biarkan terminal npm run start tetap terbuka.",
+    detail: "Preview lokal membaca izin dari .dev.vars. Respons 401 berarti file itu belum dimuat; Failed to fetch berarti server lokal tidak lagi terhubung.",
+    check: "Halaman terbuka dan status koneksi dapat dibaca tanpa 401.",
+  },
+  {
     title: "Siapkan koneksi",
     summary: "Isi Base URL, Slice ID SO, Slice ID staff, cookie, dan interval refresh.",
-    detail: "Ambil cookie dari request ekspor CSV di Network browser. Cookie disimpan terenkripsi dan tidak pernah ditampilkan kembali.",
-    check: "Status koneksi menunjukkan SIAP.",
+    detail: "Ambil header Cookie dari request chart di Network browser. Cookie disimpan terenkripsi dan tidak pernah ditampilkan kembali.",
+    check: "Status koneksi menunjukkan READY dan enkripsi siap.",
   },
   {
     title: "Sync bulan berjalan",
     summary: "Klik Sync sekarang. Server mengambil SO dan staff secara paralel.",
-    detail: "Filter bulan diterapkan dua kali: token tanggal pada URL upstream dan filter defensif pada transformasi server.",
+    detail: "Superset menjalankan query context chart yang tersimpan. Server lalu menerapkan guard bulan berjalan sebelum membentuk snapshot.",
     check: "Status terhubung dan waktu sync diperbarui.",
   },
   {
@@ -2285,6 +2924,94 @@ const guideSteps = [
     check: "Batch WMS berstatus SIAP sebelum diterapkan.",
   },
 ];
+
+function QuotaCalculator() {
+  const [users, setUsers] = useState(50);
+  const [interval, setInterval] = useState(5);
+  const cycles = Math.ceil(1_440 / Math.max(1, interval));
+  const workerRequests = users * cycles * 2;
+  const d1Rows = users * cycles * 3;
+  const r2ReadsMonth = users * cycles * 30;
+  const sourcePulls = cycles * 2;
+  const gauges = [
+    {
+      label: "Workers request / hari",
+      value: workerRequests,
+      limit: 100_000,
+      note: "Batas Free: 100.000 request/hari",
+    },
+    {
+      label: "D1 row read / hari",
+      value: d1Rows,
+      limit: 5_000_000,
+      note: "Batas Free: 5 juta row/hari",
+    },
+    {
+      label: "R2 read / bulan",
+      value: r2ReadsMonth,
+      limit: 10_000_000,
+      note: "Free: 10 juta Class B/bulan",
+    },
+  ];
+  return (
+    <Section eyebrow="Simulasi konservatif" title="Kalkulator refresh Cloudflare">
+      <div className="quota-inputs">
+        <label>
+          <span>Pengguna aktif bersamaan</span>
+          <input
+            className="input num"
+            min={1}
+            onChange={(event) =>
+              setUsers(Math.max(1, Number(event.target.value) || 1))
+            }
+            type="number"
+            value={users}
+          />
+        </label>
+        <label>
+          <span>Interval refresh</span>
+          <select
+            className="input"
+            onChange={(event) => setInterval(Number(event.target.value))}
+            value={interval}
+          >
+            {[1, 2, 3, 5, 10, 15, 30, 60].map((minute) => (
+              <option key={minute} value={minute}>{minute} menit</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="quota-gauges">
+        {gauges.map((gauge) => {
+          const percentage = (gauge.value / gauge.limit) * 100;
+          return (
+            <article key={gauge.label}>
+              <span>{gauge.label}</span>
+              <strong className="num">{number.format(gauge.value)}</strong>
+              <ProgressBar
+                label={gauge.label}
+                tone={
+                  percentage >= 90
+                    ? "critical"
+                    : percentage >= 65
+                      ? "warning"
+                      : "normal"
+                }
+                value={Math.min(100, percentage)}
+              />
+              <small>{percentage.toFixed(1)}% · {gauge.note}</small>
+            </article>
+          );
+        })}
+      </div>
+      <p className="section-note">
+        Estimasi memakai dua request per siklus dan satu pembacaan R2 saat
+        snapshot berubah. Superset tetap ditarik maksimal {number.format(sourcePulls)} kali
+        per hari untuk dua slice—tidak dikalikan jumlah pengguna.
+      </p>
+    </Section>
+  );
+}
 
 function GuideView() {
   const [active, setActive] = useState(0);
@@ -2330,9 +3057,9 @@ function GuideView() {
         <Section eyebrow="Cookie kedaluwarsa" title="Pulihkan sesi">
           <ol className="quality-list compact-list">
             <li><strong>01</strong><span>Buka Superset dan login ulang.</span></li>
-            <li><strong>02</strong><span>Unduh CSV dari slice yang sama.</span></li>
+            <li><strong>02</strong><span>Buka chart dengan Slice ID yang sama.</span></li>
             <li><strong>03</strong><span>Salin Cookie request terbaru.</span></li>
-            <li><strong>04</strong><span>Simpan lalu Uji & sync.</span></li>
+            <li><strong>04</strong><span>Simpan lalu uji dan tarik data.</span></li>
           </ol>
         </Section>
         <Section eyebrow="Assign manual" title="Kapan dipakai">
@@ -2340,23 +3067,65 @@ function GuideView() {
         </Section>
         <Section eyebrow="Pemecahan masalah" title="Tiga pemeriksaan cepat">
           <ol className="quality-list compact-list">
-            <li><strong>403</strong><span>Cookie atau permission slice ditolak.</span></li>
+            <li><strong>401</strong><span>Lokal: periksa .dev.vars dan restart server.</span></li>
+            <li><strong>403</strong><span>Cookie atau izin slice ditolak.</span></li>
             <li><strong>HTML</strong><span>Request diarahkan ke halaman login.</span></li>
-            <li><strong>0 row</strong><span>Cek filter bulan dan Slice ID.</span></li>
           </ol>
         </Section>
       </div>
+      <QuotaCalculator />
+      <Section eyebrow="Filter dinamis" title="Dua lapis filter yang aman">
+        <div className="filter-flow">
+          <article>
+            <Cloud aria-hidden="true" size={22} />
+            <span className="num">01</span>
+            <strong>Saved chart filter</strong>
+            <p>Superset menjalankan query context yang tersimpan pada Slice ID.</p>
+          </article>
+          <article>
+            <Server aria-hidden="true" size={22} />
+            <span className="num">02</span>
+            <strong>Guard bulan berjalan</strong>
+            <p>Server menolak baris di luar bulan aktif meski export berubah.</p>
+          </article>
+          <article>
+            <Filter aria-hidden="true" size={22} />
+            <span className="num">03</span>
+            <strong>Filter halaman</strong>
+            <p>Operator memilih banyak status, zona, wave, drop, jadwal, dan remark.</p>
+          </article>
+          <article>
+            <ShieldCheck aria-hidden="true" size={22} />
+            <span className="num">04</span>
+            <strong>Hasil dapat diaudit</strong>
+            <p>Filter yang diterapkan atau ditolak Superset tampil di Konfigurasi.</p>
+          </article>
+        </div>
+      </Section>
       <Section eyebrow="Arsitektur" title="Kenapa dashboard tetap cepat">
         <div className="architecture-row" aria-label="Alur data">
-          {["Superset slice", "Server sync", "R2 raw", "D1 status", "Snapshot UI"].map((item, index) => (
-            <div key={item}>
+          {[
+            { label: "Superset slice", icon: Cloud },
+            { label: "Server sync", icon: RefreshCw },
+            { label: "R2 snapshot", icon: Database },
+            { label: "D1 status", icon: Server },
+            { label: "Web UI", icon: Warehouse },
+          ].map((item, index) => (
+            <div key={item.label}>
+              <item.icon aria-hidden="true" size={20} />
               <span className="num">{index + 1}</span>
-              <strong>{item}</strong>
-              {index < 4 && <i aria-hidden="true">→</i>}
+              <strong>{item.label}</strong>
             </div>
           ))}
         </div>
         <p className="section-note">Browser tidak membaca Superset langsung. Ini mencegah CORS, menjaga cookie di server, dan membuat dashboard hanya memuat data yang sudah siap pakai.</p>
+      </Section>
+      <Section eyebrow="Ekspansi warehouse" title="Fondasi dari CBT ke jaringan WH">
+        <div className="warehouse-roadmap">
+          <article><span className="num">Sekarang</span><strong>CBT aktif</strong><p>Snapshot membawa kode, nama, dan zona waktu warehouse.</p></article>
+          <article><span className="num">Berikutnya</span><strong>Tambah profil WH</strong><p>Gunakan Slice ID dan aturan routing terpisah untuk setiap lokasi.</p></article>
+          <article><span className="num">Skala</span><strong>Bandingkan lintas WH</strong><p>Normalisasi KPI, lalu tampilkan selector warehouse dengan hak akses per lokasi.</p></article>
+        </div>
       </Section>
     </>
   );

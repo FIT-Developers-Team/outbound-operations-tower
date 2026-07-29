@@ -1,0 +1,10 @@
+# Salin file ini menjadi .dev.vars untuk preview lokal.
+# Jangan simpan cookie Superset di file ini; tempel melalui halaman Konfigurasi.
+OUTBOUND_ALLOW_ANONYMOUS_READ=true
+OUTBOUND_ALLOW_LOCAL_ADMIN=true
+OUTBOUND_ADMIN_EMAILS=local-operator@localhost
+OUTBOUND_WAREHOUSE_CODE=CBT
+OUTBOUND_WAREHOUSE_NAME=CBT - WH Cibitung
+OUTBOUND_WAREHOUSE_TIMEZONE=Asia/Jakarta
+SUPERSET_ALLOWED_HOSTS=dash.astronauts.id
+SUPERSET_COOKIE_ENCRYPTION_KEY=replace-with-a-local-random-secret-at-least-32-characters

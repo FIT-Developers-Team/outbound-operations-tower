@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { resolveDestinationRule } from "@/lib/outbound-logic";
+import {
+  authRequiredMessage,
+  getOutboundAccess,
+} from "@/lib/request-auth";
 import {
   loadDatasetSnapshot,
   saveDatasetSnapshot,
@@ -24,19 +27,6 @@ const actions = new Set([
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
-}
-
-async function requireAdmin() {
-  const user = await getChatGPTUser();
-  if (!user) return { user: null, authenticated: false };
-  const allowed = (process.env.OUTBOUND_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-  return {
-    user: allowed.includes(user.email.toLowerCase()) ? user : null,
-    authenticated: true,
-  };
 }
 
 function addAudit(
@@ -63,18 +53,18 @@ function addAudit(
 }
 
 export async function POST(request: NextRequest) {
-  const admin = await requireAdmin();
-  if (!admin.authenticated) {
-    return error(401, "AUTH_REQUIRED", "Masuk diperlukan.");
+  const access = await getOutboundAccess(request);
+  if (!access.authenticated) {
+    return error(401, "AUTH_REQUIRED", authRequiredMessage(request));
   }
-  const user = admin.user;
-  if (!user) {
+  if (!access.admin || !access.user) {
     return error(
       403,
       "ADMIN_REQUIRED",
       "Akun ini belum ada di OUTBOUND_ADMIN_EMAILS.",
     );
   }
+  const user = access.user;
   if (!request.headers.get("content-type")?.startsWith("application/json")) {
     return error(415, "JSON_REQUIRED", "Gunakan application/json.");
   }

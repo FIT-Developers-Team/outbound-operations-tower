@@ -7,10 +7,19 @@ export const syncConnector = sqliteTable("sync_connector", {
   staffSliceId: text("staff_slice_id").notNull().default(""),
   pathTemplate: text("path_template")
     .notNull()
-    .default("/api/v1/chart/{sliceId}/data/?format=csv&force=true"),
+    .default(
+      "/api/v1/chart/{sliceId}/data/?format=json&type=full&force=true",
+    ),
   refreshIntervalMinutes: integer("refresh_interval_minutes")
     .notNull()
     .default(5),
+  warehouseCode: text("warehouse_code").notNull().default("CBT"),
+  warehouseName: text("warehouse_name")
+    .notNull()
+    .default("CBT - WH Cibitung"),
+  warehouseTimezone: text("warehouse_timezone")
+    .notNull()
+    .default("Asia/Jakarta"),
   syncLockedUntil: text("sync_locked_until"),
   syncLockToken: text("sync_lock_token"),
   cookieCiphertext: text("cookie_ciphertext"),

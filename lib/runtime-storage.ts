@@ -3,6 +3,7 @@ import type {
   DemoDataset,
   SyncHealth,
 } from "./outbound-types";
+import { runtimeEnv } from "./runtime-env";
 
 async function runtimeBindings() {
   const runtime = await import("cloudflare:workers");
@@ -10,10 +11,19 @@ async function runtimeBindings() {
 }
 
 const DEFAULT_PATH =
+  "/api/v1/chart/{sliceId}/data/?format=json&type=full&force=true";
+const LEGACY_CSV_PATH =
   "/api/v1/chart/{sliceId}/data/?format=csv&force=true";
 const CONNECTOR_ID = "primary";
 const SNAPSHOT_ID = "current";
 const SNAPSHOT_KEY = "snapshots/current.json";
+let schemaReady: Promise<boolean> | null = null;
+
+function normalizeExportPath(pathTemplate: string | null | undefined) {
+  const path = pathTemplate?.trim();
+  if (!path || path === LEGACY_CSV_PATH) return DEFAULT_PATH;
+  return path;
+}
 
 type ConnectorRow = {
   base_url: string;
@@ -21,6 +31,9 @@ type ConnectorRow = {
   staff_slice_id: string;
   path_template: string;
   refresh_interval_minutes: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  warehouse_timezone: string;
   sync_locked_until: string | null;
   sync_lock_token: string | null;
   cookie_ciphertext: string | null;
@@ -44,12 +57,21 @@ type SnapshotRow = {
   synced_at: string;
 };
 
+export type SnapshotMetadata = {
+  datasetKey: string;
+  fallbackPayload: string | null;
+  syncedAt: string;
+};
+
 export type StoredConnector = {
   baseUrl: string;
   soSliceId: string;
   staffSliceId: string;
   pathTemplate: string;
   refreshIntervalMinutes: number;
+  warehouseCode: string;
+  warehouseName: string;
+  warehouseTimezone: string;
   syncLockedUntil: string | null;
   syncLockToken: string | null;
   cookieCiphertext: string | null;
@@ -67,7 +89,17 @@ export async function hasPersistentBindings() {
   return Boolean(env.DB && env.SNAPSHOTS);
 }
 
-export async function ensureRuntimeSchema() {
+export function ensureRuntimeSchema() {
+  if (!schemaReady) {
+    schemaReady = initializeRuntimeSchema().catch((caught) => {
+      schemaReady = null;
+      throw caught;
+    });
+  }
+  return schemaReady;
+}
+
+async function initializeRuntimeSchema() {
   const env = await runtimeBindings();
   if (!env.DB) return false;
   const db = env.DB;
@@ -80,6 +112,9 @@ export async function ensureRuntimeSchema() {
         staff_slice_id TEXT NOT NULL DEFAULT '',
         path_template TEXT NOT NULL DEFAULT '${DEFAULT_PATH}',
         refresh_interval_minutes INTEGER NOT NULL DEFAULT 5,
+        warehouse_code TEXT NOT NULL DEFAULT 'CBT',
+        warehouse_name TEXT NOT NULL DEFAULT 'CBT - WH Cibitung',
+        warehouse_timezone TEXT NOT NULL DEFAULT 'Asia/Jakarta',
         sync_locked_until TEXT,
         sync_lock_token TEXT,
         cookie_ciphertext TEXT,
@@ -149,6 +184,27 @@ export async function ensureRuntimeSchema() {
       .prepare("ALTER TABLE sync_connector ADD COLUMN sync_lock_token TEXT")
       .run();
   }
+  if (!columns.has("warehouse_code")) {
+    await db
+      .prepare(
+        "ALTER TABLE sync_connector ADD COLUMN warehouse_code TEXT NOT NULL DEFAULT 'CBT'",
+      )
+      .run();
+  }
+  if (!columns.has("warehouse_name")) {
+    await db
+      .prepare(
+        "ALTER TABLE sync_connector ADD COLUMN warehouse_name TEXT NOT NULL DEFAULT 'CBT - WH Cibitung'",
+      )
+      .run();
+  }
+  if (!columns.has("warehouse_timezone")) {
+    await db
+      .prepare(
+        "ALTER TABLE sync_connector ADD COLUMN warehouse_timezone TEXT NOT NULL DEFAULT 'Asia/Jakarta'",
+      )
+      .run();
+  }
   return true;
 }
 
@@ -156,18 +212,23 @@ export async function getStoredConnector(): Promise<StoredConnector> {
   const env = await runtimeBindings();
   const now = new Date().toISOString();
   const fromEnvironment = {
-    baseUrl: process.env.SUPERSET_BASE_URL?.trim() ?? "",
-    soSliceId: process.env.SUPERSET_SO_SLICE_ID?.trim() ?? "",
-    staffSliceId: process.env.SUPERSET_STAFF_SLICE_ID?.trim() ?? "",
+    baseUrl: runtimeEnv("SUPERSET_BASE_URL")?.trim() ?? "",
+    soSliceId: runtimeEnv("SUPERSET_SO_SLICE_ID")?.trim() ?? "",
+    staffSliceId: runtimeEnv("SUPERSET_STAFF_SLICE_ID")?.trim() ?? "",
     pathTemplate:
-      process.env.SUPERSET_EXPORT_PATH_TEMPLATE?.trim() || DEFAULT_PATH,
+      runtimeEnv("SUPERSET_EXPORT_PATH_TEMPLATE")?.trim() || DEFAULT_PATH,
     refreshIntervalMinutes: Math.min(
       60,
       Math.max(
         1,
-        Number(process.env.SUPERSET_REFRESH_INTERVAL_MINUTES) || 5,
+        Number(runtimeEnv("SUPERSET_REFRESH_INTERVAL_MINUTES")) || 5,
       ),
     ),
+    warehouseCode: runtimeEnv("OUTBOUND_WAREHOUSE_CODE")?.trim() || "CBT",
+    warehouseName:
+      runtimeEnv("OUTBOUND_WAREHOUSE_NAME")?.trim() || "CBT - WH Cibitung",
+    warehouseTimezone:
+      runtimeEnv("OUTBOUND_WAREHOUSE_TIMEZONE")?.trim() || "Asia/Jakarta",
   };
   if (!env.DB) {
     return {
@@ -176,7 +237,7 @@ export async function getStoredConnector(): Promise<StoredConnector> {
       cookieIv: null,
       syncLockedUntil: null,
       syncLockToken: null,
-      cookieExpiresAt: process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() || null,
+      cookieExpiresAt: runtimeEnv("SUPERSET_COOKIE_EXPIRES_AT")?.trim() || null,
       cookieUpdatedAt: null,
       health:
         fromEnvironment.baseUrl &&
@@ -192,7 +253,8 @@ export async function getStoredConnector(): Promise<StoredConnector> {
   await ensureRuntimeSchema();
   const row = await env.DB.prepare(
     `SELECT base_url, so_slice_id, staff_slice_id, path_template,
-            refresh_interval_minutes, sync_locked_until, sync_lock_token,
+            refresh_interval_minutes, warehouse_code, warehouse_name,
+            warehouse_timezone, sync_locked_until, sync_lock_token,
             cookie_ciphertext, cookie_iv, cookie_expires_at, cookie_updated_at,
             health, last_message, last_verified_at, updated_at
        FROM sync_connector WHERE id = ?1`,
@@ -206,7 +268,7 @@ export async function getStoredConnector(): Promise<StoredConnector> {
       cookieIv: null,
       syncLockedUntil: null,
       syncLockToken: null,
-      cookieExpiresAt: process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() || null,
+      cookieExpiresAt: runtimeEnv("SUPERSET_COOKIE_EXPIRES_AT")?.trim() || null,
       cookieUpdatedAt: null,
       health:
         fromEnvironment.baseUrl &&
@@ -223,16 +285,22 @@ export async function getStoredConnector(): Promise<StoredConnector> {
     baseUrl: row.base_url || fromEnvironment.baseUrl,
     soSliceId: row.so_slice_id || fromEnvironment.soSliceId,
     staffSliceId: row.staff_slice_id || fromEnvironment.staffSliceId,
-    pathTemplate: row.path_template || fromEnvironment.pathTemplate,
+    pathTemplate: normalizeExportPath(
+      row.path_template || fromEnvironment.pathTemplate,
+    ),
     refreshIntervalMinutes:
       row.refresh_interval_minutes || fromEnvironment.refreshIntervalMinutes,
+    warehouseCode: row.warehouse_code || fromEnvironment.warehouseCode,
+    warehouseName: row.warehouse_name || fromEnvironment.warehouseName,
+    warehouseTimezone:
+      row.warehouse_timezone || fromEnvironment.warehouseTimezone,
     syncLockedUntil: row.sync_locked_until,
     syncLockToken: row.sync_lock_token,
     cookieCiphertext: row.cookie_ciphertext,
     cookieIv: row.cookie_iv,
     cookieExpiresAt:
       row.cookie_expires_at ||
-      process.env.SUPERSET_COOKIE_EXPIRES_AT?.trim() ||
+      runtimeEnv("SUPERSET_COOKIE_EXPIRES_AT")?.trim() ||
       null,
     cookieUpdatedAt: row.cookie_updated_at,
     health: row.health,
@@ -251,16 +319,20 @@ export async function saveStoredConnector(
   await env.DB.prepare(`
     INSERT INTO sync_connector (
       id, base_url, so_slice_id, staff_slice_id, path_template,
-      refresh_interval_minutes, sync_locked_until, sync_lock_token, cookie_ciphertext,
+      refresh_interval_minutes, warehouse_code, warehouse_name, warehouse_timezone,
+      sync_locked_until, sync_lock_token, cookie_ciphertext,
       cookie_iv, cookie_expires_at, cookie_updated_at,
       health, last_message, last_verified_at, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
     ON CONFLICT(id) DO UPDATE SET
       base_url = excluded.base_url,
       so_slice_id = excluded.so_slice_id,
       staff_slice_id = excluded.staff_slice_id,
       path_template = excluded.path_template,
       refresh_interval_minutes = excluded.refresh_interval_minutes,
+      warehouse_code = excluded.warehouse_code,
+      warehouse_name = excluded.warehouse_name,
+      warehouse_timezone = excluded.warehouse_timezone,
       sync_locked_until = excluded.sync_locked_until,
       sync_lock_token = excluded.sync_lock_token,
       cookie_ciphertext = excluded.cookie_ciphertext,
@@ -279,6 +351,9 @@ export async function saveStoredConnector(
       connector.staffSliceId,
       connector.pathTemplate,
       connector.refreshIntervalMinutes,
+      connector.warehouseCode,
+      connector.warehouseName,
+      connector.warehouseTimezone,
       connector.syncLockedUntil,
       connector.syncLockToken,
       connector.cookieCiphertext,
@@ -349,7 +424,7 @@ function fromBase64(value: string) {
 }
 
 async function cookieKey() {
-  const secret = process.env.SUPERSET_COOKIE_ENCRYPTION_KEY?.trim() ?? "";
+  const secret = runtimeEnv("SUPERSET_COOKIE_ENCRYPTION_KEY")?.trim() ?? "";
   if (secret.length < 32) {
     throw new Error(
       "SUPERSET_COOKIE_ENCRYPTION_KEY minimal 32 karakter belum dikonfigurasi.",
@@ -380,7 +455,7 @@ export async function encryptCookie(value: string) {
 }
 
 export async function getSessionCookie(connector: StoredConnector) {
-  const environmentCookie = process.env.SUPERSET_SESSION_COOKIE?.trim();
+  const environmentCookie = runtimeEnv("SUPERSET_SESSION_COOKIE")?.trim();
   if (environmentCookie) return environmentCookie;
   if (!connector.cookieCiphertext || !connector.cookieIv) return "";
   const key = await cookieKey();
@@ -407,7 +482,7 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
     ).first<RunRow>();
   }
   const environmentCookie = Boolean(
-    process.env.SUPERSET_SESSION_COOKIE?.trim(),
+    runtimeEnv("SUPERSET_SESSION_COOKIE")?.trim(),
   );
   return {
     baseUrl: connector.baseUrl,
@@ -415,6 +490,9 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
     staffSliceId: connector.staffSliceId,
     pathTemplate: connector.pathTemplate,
     refreshIntervalMinutes: connector.refreshIntervalMinutes,
+    warehouseCode: connector.warehouseCode,
+    warehouseName: connector.warehouseName,
+    warehouseTimezone: connector.warehouseTimezone,
     currentMonthOnly: true,
     cookiePresent: environmentCookie || Boolean(connector.cookieCiphertext),
     cookieSource: environmentCookie
@@ -425,7 +503,7 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
     cookieExpiresAt: connector.cookieExpiresAt,
     cookieUpdatedAt: connector.cookieUpdatedAt,
     encryptionReady:
-      (process.env.SUPERSET_COOKIE_ENCRYPTION_KEY?.trim().length ?? 0) >= 32,
+      (runtimeEnv("SUPERSET_COOKIE_ENCRYPTION_KEY")?.trim().length ?? 0) >= 32,
     health: cookieExpired ? "EXPIRED" : connector.health,
     lastMessage: connector.lastMessage,
     lastVerifiedAt: connector.lastVerifiedAt,
@@ -527,50 +605,76 @@ export async function saveDatasetSnapshot(
   return SNAPSHOT_KEY;
 }
 
-export async function loadDatasetSnapshot(): Promise<{
+export async function getDatasetSnapshotMetadata(): Promise<SnapshotMetadata | null> {
+  const env = await runtimeBindings();
+  if (!env.DB) return null;
+  await ensureRuntimeSchema();
+  const row = await env.DB.prepare(
+    "SELECT dataset_key, fallback_payload, synced_at FROM dataset_snapshots WHERE id = ?1",
+  )
+    .bind(SNAPSHOT_ID)
+    .first<SnapshotRow>();
+  return row
+    ? {
+        datasetKey: row.dataset_key,
+        fallbackPayload: row.fallback_payload,
+        syncedAt: row.synced_at,
+      }
+    : null;
+}
+
+function normalizeDataset(data: DemoDataset): DemoDataset {
+  return {
+    ...data,
+    warehouse: data.warehouse ?? {
+      code: "CBT",
+      name: "CBT - WH Cibitung",
+      timezone: "Asia/Jakarta",
+    },
+    pickerProductivity: data.pickerProductivity ?? [],
+    orders: data.orders.map((order) => ({
+      ...order,
+      remarks: order.remarks ?? [],
+      skuDetails: order.skuDetails ?? [],
+    })),
+    sourceProfile: {
+      ...data.sourceProfile,
+      savedChartFilters: data.sourceProfile.savedChartFilters ?? {
+        so: [],
+        staff: [],
+        rejected: [],
+      },
+    },
+  };
+}
+
+export async function loadDatasetSnapshot(
+  knownMetadata?: SnapshotMetadata | null,
+): Promise<{
   data: DemoDataset;
   syncedAt: string;
 } | null> {
   const env = await runtimeBindings();
-  let row: SnapshotRow | null = null;
-  if (env.DB) {
-    await ensureRuntimeSchema();
-    row = await env.DB.prepare(
-      "SELECT dataset_key, fallback_payload, synced_at FROM dataset_snapshots WHERE id = ?1",
-    )
-      .bind(SNAPSHOT_ID)
-      .first<SnapshotRow>();
-  }
-  const key = row?.dataset_key ?? SNAPSHOT_KEY;
+  const metadata =
+    knownMetadata === undefined
+      ? await getDatasetSnapshotMetadata()
+      : knownMetadata;
+  const key = metadata?.datasetKey ?? SNAPSHOT_KEY;
   if (env.SNAPSHOTS) {
     const object = await env.SNAPSHOTS.get(key);
     if (object) {
       const data = await object.json<DemoDataset>();
       return {
-        data: {
-          ...data,
-          orders: data.orders.map((order) => ({
-            ...order,
-            remarks: order.remarks ?? [],
-            skuDetails: order.skuDetails ?? [],
-          })),
-        },
-        syncedAt: row?.synced_at ?? new Date().toISOString(),
+        data: normalizeDataset(data),
+        syncedAt: metadata?.syncedAt ?? new Date().toISOString(),
       };
     }
   }
-  if (row?.fallback_payload) {
-    const data = JSON.parse(row.fallback_payload) as DemoDataset;
+  if (metadata?.fallbackPayload) {
+    const data = JSON.parse(metadata.fallbackPayload) as DemoDataset;
     return {
-      data: {
-        ...data,
-        orders: data.orders.map((order) => ({
-          ...order,
-          remarks: order.remarks ?? [],
-          skuDetails: order.skuDetails ?? [],
-        })),
-      },
-      syncedAt: row.synced_at,
+      data: normalizeDataset(data),
+      syncedAt: metadata.syncedAt,
     };
   }
   return null;

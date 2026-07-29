@@ -109,12 +109,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         "outbound-superset-sync",
         { ifAvailable: true },
         async (lock) => {
-          if (lock) await refresh({ quiet: true, forceSource: true });
+          if (lock) {
+            await refresh({
+              quiet: true,
+              forceSource: true,
+              sourceMode: "auto",
+            });
+          }
         },
       );
       return;
     }
-    await refresh({ quiet: true, forceSource: true });
+    await refresh({
+      quiet: true,
+      forceSource: true,
+      sourceMode: "auto",
+    });
   }, [refresh]);
 
   useEffect(() => {
@@ -234,15 +244,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        <div className="sidebar-foot">
-          <span className="avatar">CB</span>
-          {!rail && (
-            <span>
-              <strong>CBT Supervisor</strong>
-              <small>Pimpinan operasi</small>
-            </span>
-          )}
-        </div>
       </aside>
 
       <div className="app-main">
@@ -257,7 +258,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span>Menu</span>
           </button>
           <div className="topbar-context">
-            <span className="eyebrow">Outbound CBT</span>
+            <span className="eyebrow">
+              Outbound {data.warehouse.code}
+            </span>
             <strong>{operationDate} · snapshot operasi</strong>
           </div>
           <div className="topbar-actions">
@@ -271,7 +274,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </button>
             <button
               aria-label={
-                paused ? "Aktifkan baca ulang otomatis" : "Jeda baca ulang otomatis"
+                paused ? "Aktifkan refresh otomatis" : "Jeda refresh otomatis"
               }
               className="sync-control"
               onClick={() => setPaused((value) => !value)}
@@ -282,7 +285,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               ) : (
                 <Pause aria-hidden="true" size={15} />
               )}
-              <span>{paused ? "Auto dijeda" : `Auto ${autoSyncMinutes}m`}</span>
+              <span>
+                {paused ? "Auto dijeda" : `Refresh ${autoSyncMinutes}m`}
+              </span>
             </button>
             <button
               aria-label="Sinkronkan data Superset sekarang"

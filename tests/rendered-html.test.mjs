@@ -65,6 +65,7 @@ test("server-renders the outbound assignment hub", async () => {
   assert.match(html, /Ringkasan outbound/i);
   assert.match(html, /Request vs selesai pick/i);
   assert.doesNotMatch(html, /Spatial operations|spatial-hero/i);
+  assert.doesNotMatch(html, /CBT Supervisor|Pimpinan operasi/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton|Your site is taking shape/i);
 });
 

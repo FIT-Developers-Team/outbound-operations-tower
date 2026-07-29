@@ -1,30 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
 import {
   aggregateMetrics,
   buildBulkUploadRows,
   summarizeZones,
 } from "@/lib/outbound-logic";
-import { loadDatasetSnapshot } from "@/lib/runtime-storage";
+import {
+  getDatasetSnapshotMetadata,
+  loadDatasetSnapshot,
+} from "@/lib/runtime-storage";
+import {
+  anonymousReadEnabled,
+  authRequiredMessage,
+  getOutboundAccess,
+} from "@/lib/request-auth";
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
 }
 
 export async function GET(request: NextRequest) {
-  const allowAnonymous = process.env.OUTBOUND_ALLOW_ANONYMOUS_READ === "true";
-  if (!allowAnonymous && !(await getChatGPTUser())) {
+  const access = await getOutboundAccess(request);
+  if (!anonymousReadEnabled() && !access.authenticated) {
     return error(
       401,
       "AUTH_REQUIRED",
-      "Masuk diperlukan untuk membaca data outbound.",
+      authRequiredMessage(request),
     );
   }
 
   const resource =
     request.nextUrl.searchParams.get("resource")?.trim().toLowerCase() ??
     "dataset";
-  const snapshot = await loadDatasetSnapshot();
+  const metadata = await getDatasetSnapshotMetadata();
+  const etag = metadata?.syncedAt
+    ? `"snapshot-${metadata.syncedAt}"`
+    : null;
+  if (etag && request.headers.get("if-none-match") === etag) {
+    return new NextResponse(null, {
+      status: 304,
+      headers: {
+        ETag: etag,
+        "Cache-Control": "private, max-age=0, must-revalidate",
+      },
+    });
+  }
+  const snapshot = await loadDatasetSnapshot(metadata);
   if (!snapshot) {
     return error(
       503,
@@ -81,6 +101,11 @@ export async function GET(request: NextRequest) {
       data: payload,
       syncedAt: snapshot.syncedAt,
     },
-    { headers: { "Cache-Control": "private, no-store" } },
+    {
+      headers: {
+        "Cache-Control": "private, max-age=0, must-revalidate",
+        ...(etag ? { ETag: etag } : {}),
+      },
+    },
   );
 }

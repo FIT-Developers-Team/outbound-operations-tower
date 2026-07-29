@@ -1,6 +1,7 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { setRuntimeEnvBindings } from "../lib/runtime-env";
 
 interface Env {
   ASSETS: Fetcher;
@@ -28,6 +29,7 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    setRuntimeEnvBindings(env as unknown as Record<string, unknown>);
     const url = new URL(request.url);
     let response: Response;
 

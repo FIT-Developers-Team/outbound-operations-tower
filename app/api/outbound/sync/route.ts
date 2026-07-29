@@ -1,62 +1,110 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChatGPTUser } from "@/app/chatgpt-auth";
 import {
   acquireSyncLease,
   beginSyncRun,
   finishSyncRun,
+  getDatasetSnapshotMetadata,
   getStoredConnector,
   releaseSyncLease,
   saveStoredConnector,
 } from "@/lib/runtime-storage";
+import {
+  anonymousReadEnabled,
+  authRequiredMessage,
+  getOutboundAccess,
+} from "@/lib/request-auth";
 import { jakartaMonth, syncFromSuperset } from "@/lib/superset-sync";
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
 }
 
-async function requireAdmin() {
-  const user = await getChatGPTUser();
-  if (!user) return { user: null, authenticated: false };
-  const allowed = (process.env.OUTBOUND_ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-  return {
-    user: allowed.includes(user.email.toLowerCase()) ? user : null,
-    authenticated: true,
-  };
+async function freshSnapshot() {
+  const [connector, snapshot] = await Promise.all([
+    getStoredConnector(),
+    getDatasetSnapshotMetadata(),
+  ]);
+  if (!snapshot) return null;
+  const ageMs = Date.now() - Date.parse(snapshot.syncedAt);
+  const maxAgeMs = connector.refreshIntervalMinutes * 60_000;
+  return ageMs >= 0 && ageMs < maxAgeMs ? snapshot : null;
 }
 
 export async function POST(request: NextRequest) {
-  const admin = await requireAdmin();
-  if (!admin.authenticated) {
-    return error(401, "AUTH_REQUIRED", "Masuk diperlukan.");
+  const origin = request.headers.get("origin");
+  if (origin && origin !== request.nextUrl.origin) {
+    return error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
   }
-  const user = admin.user;
-  if (!user) {
+  const body = request.headers
+    .get("content-type")
+    ?.startsWith("application/json")
+    ? await request.json().catch(() => ({}))
+    : {};
+  const mode =
+    body &&
+    typeof body === "object" &&
+    (body as Record<string, unknown>).mode === "auto"
+      ? "auto"
+      : "manual";
+  const access = await getOutboundAccess(request);
+  if (
+    (!access.authenticated && !anonymousReadEnabled()) ||
+    (mode === "manual" && !access.authenticated)
+  ) {
+    return error(401, "AUTH_REQUIRED", authRequiredMessage(request));
+  }
+  if (mode === "manual" && !access.admin) {
     return error(
       403,
       "ADMIN_REQUIRED",
       "Akun ini belum memiliki izin sinkronisasi.",
     );
   }
-  const origin = request.headers.get("origin");
-  if (origin && origin !== request.nextUrl.origin) {
-    return error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
+
+  if (mode === "auto") {
+    const snapshot = await freshSnapshot();
+    if (snapshot) {
+      return NextResponse.json({
+        ok: true,
+        skipped: true,
+        message: "Snapshot masih dalam interval refresh.",
+        syncedAt: snapshot.syncedAt,
+      });
+    }
   }
 
   const runId = crypto.randomUUID();
   const month = jakartaMonth().key;
   const lease = await acquireSyncLease();
   if (!lease.acquired) {
-    return error(
-      409,
-      "SYNC_ALREADY_RUNNING",
-      "Sync lain masih berjalan. Snapshot akan diperbarui setelah proses selesai.",
+    const snapshot = await getDatasetSnapshotMetadata();
+    return NextResponse.json(
+      {
+        ok: true,
+        skipped: true,
+        message: "Sync lain sedang berjalan.",
+        syncedAt: snapshot?.syncedAt ?? null,
+      },
+      { status: 202 },
     );
   }
   try {
-    await beginSyncRun(runId, user.email, month);
+    if (mode === "auto") {
+      const snapshot = await freshSnapshot();
+      if (snapshot) {
+        return NextResponse.json({
+          ok: true,
+          skipped: true,
+          message: "Snapshot sudah diperbarui oleh pengguna lain.",
+          syncedAt: snapshot.syncedAt,
+        });
+      }
+    }
+    await beginSyncRun(
+      runId,
+      access.user?.email ?? "auto-refresh",
+      month,
+    );
     const result = await syncFromSuperset(runId);
     const message = `${result.soRows.toLocaleString("id-ID")} baris SO dan ${result.staffRows.toLocaleString("id-ID")} baris staff tersinkron.`;
     await finishSyncRun({

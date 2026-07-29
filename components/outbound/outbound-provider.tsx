@@ -53,6 +53,7 @@ type OutboundContextValue = {
   refresh: (options?: {
     quiet?: boolean;
     forceSource?: boolean;
+    sourceMode?: "auto" | "manual";
   }) => Promise<void>;
   stageManual: (inputs: ManualAssignmentInput[]) => void;
   setCheckerStatus: (routeId: string, status: CheckerState) => void;
@@ -77,12 +78,28 @@ function isDataset(value: unknown): value is DemoDataset {
     Array.isArray(candidate.checkerRoutes) &&
     Array.isArray(candidate.audit) &&
     Array.isArray(candidate.hourly) &&
+    Array.isArray(candidate.pickerProductivity) &&
+    Boolean(candidate.warehouse) &&
     Boolean(candidate.sourceProfile)
   );
 }
 
 function stableCommandKey(action: string) {
   return `${action}:${new Date().toISOString().slice(0, 10)}:${crypto.randomUUID()}`;
+}
+
+function readableNetworkError(caught: unknown) {
+  if (
+    caught instanceof TypeError &&
+    /fetch|network|load/i.test(caught.message)
+  ) {
+    return window.location.hostname === "localhost"
+      ? "Server lokal tidak dapat dijangkau. Pastikan terminal npm run start tetap terbuka, lalu coba lagi."
+      : "Server tidak dapat dijangkau. Periksa koneksi lalu coba lagi.";
+  }
+  return caught instanceof Error
+    ? caught.message
+    : "Sumber live belum dapat dijangkau.";
 }
 
 export function OutboundProvider({ children }: { children: ReactNode }) {
@@ -95,6 +112,8 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
   const [proposals, setProposals] = useState<AssignmentProposal[]>([]);
   const refreshAbort = useRef<AbortController | null>(null);
   const initialRefresh = useRef(false);
+  const datasetEtag = useRef<string | null>(null);
+  const lastSyncRef = useRef<string | null>(null);
 
   const showNotice = useCallback(
     (
@@ -116,7 +135,12 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     async ({
       quiet = false,
       forceSource = false,
-    }: { quiet?: boolean; forceSource?: boolean } = {}) => {
+      sourceMode = "manual",
+    }: {
+      quiet?: boolean;
+      forceSource?: boolean;
+      sourceMode?: "auto" | "manual";
+    } = {}) => {
       refreshAbort.current?.abort();
       const controller = new AbortController();
       refreshAbort.current = controller;
@@ -126,24 +150,56 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
         if (forceSource) {
           const syncResponse = await fetch("/api/outbound/sync", {
             method: "POST",
-            headers: { Accept: "application/json" },
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ mode: sourceMode }),
             signal: controller.signal,
           });
           const syncPayload = (await syncResponse.json()) as {
             message?: string;
             ok?: boolean;
+            skipped?: boolean;
+            syncedAt?: string | null;
           };
           if (!syncResponse.ok || syncPayload.ok !== true) {
             throw new Error(
               syncPayload.message || "Sinkronisasi Superset gagal.",
             );
           }
+          if (
+            sourceMode === "auto" &&
+            syncPayload.skipped &&
+            syncPayload.syncedAt &&
+            syncPayload.syncedAt === lastSyncRef.current
+          ) {
+            setPhase("ready");
+            return;
+          }
+        }
+        const headers: Record<string, string> = {
+          Accept: "application/json",
+        };
+        if (datasetEtag.current) {
+          headers["If-None-Match"] = datasetEtag.current;
         }
         const response = await fetch("/api/outbound?resource=dataset", {
           cache: "no-store",
-          headers: { Accept: "application/json" },
+          headers,
           signal: controller.signal,
         });
+        if (response.status === 304) {
+          setPhase("ready");
+          if (!quiet) {
+            showNotice(
+              "info",
+              "Data sudah terbaru",
+              "Tidak ada snapshot baru sejak refresh terakhir.",
+            );
+          }
+          return;
+        }
         const payload = (await response.json()) as {
           data?: unknown;
           message?: string;
@@ -159,7 +215,10 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
 
         setData(payload.data);
         setDataMode("live");
-        setLastSync(payload.syncedAt || new Date().toISOString());
+        const nextSync = payload.syncedAt || new Date().toISOString();
+        setLastSync(nextSync);
+        lastSyncRef.current = nextSync;
+        datasetEtag.current = response.headers.get("etag");
         setSelectedOrders(new Set());
         setProposals([]);
         setPhase("ready");
@@ -179,9 +238,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
           showNotice(
             "warning",
             "Sample fallback aktif",
-            caught instanceof Error
-              ? caught.message
-              : "Sumber live belum dapat dijangkau.",
+            readableNetworkError(caught),
           );
         }
       }
