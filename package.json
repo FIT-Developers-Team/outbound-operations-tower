@@ -9,6 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "node scripts/start-local.mjs",
+    "start:container": "node scripts/start-container.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

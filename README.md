@@ -209,6 +209,7 @@ Picker eligible harus aktif, memiliki Staff ID/nama, sesuai role, tidak Off Day,
 ## Struktur proyek
 
 ```text
+Dockerfile                 image self-host (build + runtime workerd)
 app/
   (dashboard)/             route halaman
   api/outbound/
@@ -230,6 +231,9 @@ lib/
   request-auth.ts          auth platform + localhost guard
   runtime-storage.ts       D1, R2, ETag, enkripsi cookie
   superset-sync.ts         fetch, parse, transform, filter metadata
+scripts/
+  start-local.mjs          runtime Wrangler lokal
+  start-container.mjs      entry point container self-host
 tests/                     unit, route, auth, rendering, asset
 worker/index.ts            Worker entry + security headers
 ```
@@ -534,6 +538,68 @@ Jangan set `OUTBOUND_ALLOW_LOCAL_ADMIN` di production.
 
 Setiap deployment URL Sites adalah production URL. Gunakan akses private kecuali data telah disetujui untuk publik.
 
+## Deployment ke Coolify (Docker)
+
+`Dockerfile` di root menyediakan runtime self-host. Build stage menjalankan `npm ci` dan `npm run build`; runtime stage menjalankan workerd melalui `wrangler dev`. Base image memakai Debian slim karena Cloudflare hanya merilis workerd untuk glibc, sehingga Alpine tidak dapat dipakai.
+
+### Perbedaan dengan Sites
+
+| Aspek | Sites | Coolify |
+|---|---|---|
+| Binding D1 `DB` | D1 Cloudflare | SQLite lokal Miniflare di dalam container |
+| Binding R2 `SNAPSHOTS` | bucket Cloudflare | filesystem lokal di dalam container |
+| Migration | lifecycle deployment Sites | otomatis saat container start |
+| Persistensi | dikelola Cloudflare | bergantung volume `/data` |
+
+Snapshot pada kedua runtime **tidak saling sinkron**. Deployment Coolify bukan replika data Sites, dan snapshot lama di D1 Cloudflare tidak ikut berpindah.
+
+### Setelan aplikasi Coolify
+
+1. Build Pack: **Dockerfile**. Nilai lain menyebabkan build gagal membaca `Dockerfile`.
+2. Base Directory: `/`.
+3. Dockerfile Location: `/Dockerfile`.
+4. Ports Exposes: `3000`.
+5. Persistent Storage: volume pada `/data`.
+6. Health check container sudah tersedia di image.
+
+Tanpa volume `/data`, seluruh snapshot, konfigurasi connector, dan cookie terenkripsi hilang pada setiap redeploy.
+
+### Environment
+
+Hanya variable berprefix `OUTBOUND_` dan `SUPERSET_` yang diteruskan menjadi binding Worker. Variable platform seperti `PATH` atau `COOLIFY_*` tidak ikut. Minimum environment sama dengan Sites:
+
+```text
+OUTBOUND_ADMIN_EMAILS
+OUTBOUND_ALLOW_ANONYMOUS_READ
+OUTBOUND_WAREHOUSE_CODE
+OUTBOUND_WAREHOUSE_NAME
+OUTBOUND_WAREHOUSE_TIMEZONE
+SUPERSET_ALLOWED_HOSTS
+SUPERSET_COOKIE_ENCRYPTION_KEY
+```
+
+Variable khusus container:
+
+| Variable | Default | Fungsi |
+|---|---|---|
+| `PORT` | `3000` | port listen workerd |
+| `HOST` | `0.0.0.0` | alamat listen di dalam container |
+| `OUTBOUND_STATE_DIR` | `/data/wrangler-state` | lokasi state D1 dan R2 |
+
+Entry point menulis variable tersebut ke file env dengan permission `600` di luar volume agar tidak tersimpan melebihi umur container, lalu mencatat nama variable saja pada log. Nilai cookie dan encryption key tidak pernah dicetak.
+
+### Verifikasi lokal sebelum push
+
+```bash
+docker build -t outbound-operations-hub .
+```
+
+```bash
+docker run --rm -p 3000:3000 -v outbound-state:/data --env-file .dev.vars outbound-operations-hub
+```
+
+Migration `drizzle/*.sql` diterapkan otomatis pada setiap start dan bersifat idempoten melalui tabel `d1_migrations`. Jika migration gagal, container berhenti sebelum runtime dijalankan agar schema tidak dipakai setengah jadi.
+
 ## Performa dan keamanan
 
 - tidak ada animasi CSS/JS pada alur operasional;
@@ -641,6 +707,18 @@ Tujuan baru tetap muncul otomatis dari data sebagai `UNMAPPED`. Tambahkan rule W
 ### Windows `EPERM ... dist/server/.wrangler`
 
 Server preview lama masih mengunci folder build. Hentikan proses `wrangler dev`, lalu jalankan ulang build. Jangan menghapus workspace secara rekursif.
+
+### Coolify `failed to read dockerfile`
+
+Build Pack aplikasi diset ke Dockerfile sementara Dockerfile Location menunjuk path yang tidak ada. Pastikan Base Directory `/` dan Dockerfile Location `/Dockerfile`. Log build menunjukkan `transferring dockerfile: 2B` ketika Coolify tidak menemukan file tersebut.
+
+### Container start dengan database kosong
+
+Volume `/data` belum terpasang atau diganti pada redeploy. Snapshot dan konfigurasi connector tersimpan pada state Miniflare di dalam volume tersebut, bukan pada D1 Cloudflare.
+
+### `Direktori state ... tidak bisa ditulis`
+
+Volume `/data` dimiliki root sementara container berjalan sebagai user `node` (uid 1000). Gunakan volume Docker bernama, bukan bind mount ke path host milik root.
 
 ## Checklist UAT
 

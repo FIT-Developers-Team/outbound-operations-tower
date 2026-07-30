@@ -1,0 +1,34 @@
+# Build context hygiene. `build/` is source (Vite plugin), not output, so it
+# must stay in the context.
+
+node_modules
+dist
+.next
+.vinext
+.wrangler
+.workbook-build
+.npm-cache
+out
+outputs
+work
+coverage
+migrations
+*.tsbuildinfo
+
+# Secrets and local runtime state never enter an image.
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.pem
+*.log
+
+.git
+.github
+.vscode
+.idea
+examples
+tests
+Dockerfile
+.dockerignore
+README.md
