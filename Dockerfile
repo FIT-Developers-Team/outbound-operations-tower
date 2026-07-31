@@ -1,4 +1,7 @@
-# syntax=docker/dockerfile:1
+# No `# syntax=` directive on purpose. It makes BuildKit fetch a frontend image
+# from Docker Hub before it can parse this file, which fails on a build server
+# with restricted registry access. Nothing here needs a newer frontend than the
+# one built into the daemon.
 
 # Cloudflare publishes workerd, the runtime `wrangler dev` boots, as glibc-only
 # builds, so this image stays on Debian slim instead of Alpine.

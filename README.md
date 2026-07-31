@@ -605,7 +605,7 @@ Pada Sites, identitas operator berasal dari header `oai-authenticated-user-email
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
 
-2. Set `OUTBOUND_ADMIN_TOKEN` pada environment Coolify, dan pastikan email operator ada di `OUTBOUND_ADMIN_EMAILS`.
+2. Set `OUTBOUND_ADMIN_TOKEN` pada environment Coolify, dan pastikan email operator ada di `OUTBOUND_ADMIN_EMAILS`. **Jangan centang Build Variable.** Coolify menulis build variable ke Dockerfile sebagai `ARG NAMA=nilai`, dan nilai itu ikut tersimpan pada metadata image sehingga terbaca lewat `docker history`. Token hanya dibutuhkan saat runtime.
 3. Buka `/masuk`, isi email dan token, lalu kembali ke Konfigurasi.
 
 Server mengeluarkan cookie sesi bertanda tangan HMAC-SHA256 dengan atribut `HttpOnly`, `SameSite=Strict`, dan `Secure` bila diakses melalui HTTPS. Sesi berlaku 12 jam. Allowlist `OUTBOUND_ADMIN_EMAILS` diperiksa ulang pada setiap request, jadi menghapus satu email langsung mencabut aksesnya tanpa menunggu cookie kedaluwarsa. Token hanya diverifikasi lewat perbandingan digest, dan email salah maupun token salah dijawab identik agar daftar admin tidak bisa ditebak.
@@ -750,6 +750,10 @@ curl -s https://DOMAIN/api/outbound/session
 | masuk ditolak | email belum terdaftar | tambahkan email ke `OUTBOUND_ADMIN_EMAILS` |
 
 Log start-up container juga menyebutkan secara eksplisit bila token belum diset atau terlalu pendek. Panjang token dicetak, nilainya tidak.
+
+### Build gagal pada `resolve image config for docker-image://docker.io/docker/dockerfile`
+
+Direktif `# syntax=` membuat BuildKit menarik image frontend dari Docker Hub sebelum Dockerfile dapat dibaca, dan build server tanpa akses registry akan gagal dengan `TLS handshake timeout`. Dockerfile ini sengaja tidak memakai direktif tersebut. Jika kegagalan serupa muncul pada `FROM node:22-bookworm-slim`, masalahnya konektivitas registry pada server, bukan Dockerfile: perbaiki akses ke Docker Hub atau sediakan base image dari registry internal.
 
 ### Coolify `failed to read dockerfile`
 
