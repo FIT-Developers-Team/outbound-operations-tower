@@ -3080,3 +3080,65 @@ textarea.input {
     scroll-behavior: auto !important;
   }
 }
+
+.signin-page {
+  display: grid;
+  min-height: 100dvh;
+  align-content: center;
+  justify-items: center;
+  padding: 24px 16px;
+  background: var(--bg);
+}
+
+.signin-card {
+  width: 100%;
+  max-width: 420px;
+}
+
+.signin-lede {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.signin-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.signin-fields {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+}
+
+.signin-fields label {
+  width: 100%;
+}
+
+.signin-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.signin-note code {
+  font-family: "Inconsolata", monospace;
+}
+
+.signin-feedback {
+  font-size: 12px;
+}
+
+.signin-feedback.is-success {
+  color: var(--status-normal);
+}
+
+.signin-feedback.is-warning {
+  color: var(--status-warning);
+}
+
+.signin-back {
+  color: var(--text-muted);
+  font-size: 12px;
+}

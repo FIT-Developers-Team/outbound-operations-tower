@@ -3,6 +3,11 @@ import {
   getChatGPTUser,
   type ChatGPTUser,
 } from "@/app/chatgpt-auth";
+import {
+  ADMIN_SESSION_COOKIE,
+  adminSignInEnabled,
+  readAdminSession,
+} from "./admin-session";
 import { runtimeEnv, runtimeFlag } from "./runtime-env";
 
 export type OutboundAccess = {
@@ -18,20 +23,56 @@ function isLocalRequest(request: NextRequest) {
   );
 }
 
+export function adminEmails() {
+  return (runtimeEnv("OUTBOUND_ADMIN_EMAILS") ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/**
+ * Sites authenticates the operator in front of the Worker and controls the
+ * identity header itself. A self-hosted runtime sits behind a proxy that
+ * forwards client headers verbatim, where trusting the header would let any
+ * caller name themselves an admin, so the container image sets this to false.
+ */
+function platformAuthTrusted() {
+  return (
+    runtimeEnv("OUTBOUND_TRUST_PLATFORM_AUTH")?.trim().toLowerCase() !== "false"
+  );
+}
+
 export async function getOutboundAccess(
   request: NextRequest,
 ): Promise<OutboundAccess> {
-  const user = await getChatGPTUser();
+  const allowed = adminEmails();
+
+  const user = platformAuthTrusted() ? await getChatGPTUser() : null;
   if (user) {
-    const allowed = (runtimeEnv("OUTBOUND_ADMIN_EMAILS") ?? "")
-      .split(",")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean);
     return {
       authenticated: true,
       admin: allowed.includes(user.email.toLowerCase()),
       local: false,
       user,
+    };
+  }
+
+  // The allowlist is re-checked on every request, so removing an address from
+  // OUTBOUND_ADMIN_EMAILS revokes access without waiting for the cookie to age
+  // out.
+  const sessionEmail = await readAdminSession(
+    request.cookies.get(ADMIN_SESSION_COOKIE)?.value,
+  );
+  if (sessionEmail && allowed.includes(sessionEmail.toLowerCase())) {
+    return {
+      authenticated: true,
+      admin: true,
+      local: false,
+      user: {
+        displayName: sessionEmail,
+        email: sessionEmail,
+        fullName: null,
+      },
     };
   }
 
@@ -64,7 +105,10 @@ export function anonymousReadEnabled() {
 }
 
 export function authRequiredMessage(request: NextRequest) {
-  return isLocalRequest(request)
-    ? "Preview lokal belum diberi izin. Siapkan .dev.vars lalu jalankan ulang npm run start."
+  if (isLocalRequest(request)) {
+    return "Preview lokal belum diberi izin. Siapkan .dev.vars lalu jalankan ulang npm run start.";
+  }
+  return adminSignInEnabled()
+    ? "Masuk diperlukan untuk mengakses data outbound. Buka /masuk lalu masuk sebagai admin."
     : "Masuk diperlukan untuk mengakses data outbound.";
 }

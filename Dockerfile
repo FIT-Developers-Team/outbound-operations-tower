@@ -37,9 +37,12 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
 
+# Traefik forwards client headers verbatim, so the Sites identity header must
+# not be treated as proof of identity here. Admins sign in at /masuk instead.
 ENV NODE_ENV=production \
     CI=true \
     PORT=3000 \
+    OUTBOUND_TRUST_PLATFORM_AUTH=false \
     OUTBOUND_STATE_DIR=/data/wrangler-state \
     WRANGLER_SEND_METRICS=false \
     WRANGLER_WRITE_LOGS=false \

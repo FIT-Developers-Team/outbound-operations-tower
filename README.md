@@ -217,7 +217,10 @@ app/
     command/route.ts       mutasi operasional
     config/route.ts        connector aman
     sync/route.ts          freshness gate + refresh Superset
+    session/route.ts       masuk dan keluar admin self-host
+  masuk/page.tsx           halaman masuk admin
 components/
+  auth/admin-signin.tsx    form masuk admin
   layout/app-shell.tsx     navigasi, status, tema
   outbound/
     outbound-provider.tsx  state, cache, command client
@@ -225,6 +228,7 @@ components/
 db/schema.ts               schema D1
 drizzle/                   migration SQL
 lib/
+  admin-session.ts         cookie sesi admin bertanda tangan
   demo-data.ts             fallback deterministik
   outbound-logic.ts        business rules murni
   outbound-types.ts        kontrak domain
@@ -284,6 +288,8 @@ Variable penting:
 | `OUTBOUND_ALLOW_LOCAL_ADMIN` | lokal | izinkan write hanya untuk hostname localhost |
 | `OUTBOUND_ALLOW_ANONYMOUS_READ` | lokal/preview | izinkan snapshot dibaca tanpa login |
 | `OUTBOUND_ADMIN_EMAILS` | production | allowlist operator admin |
+| `OUTBOUND_ADMIN_TOKEN` | self-host | token masuk admin di `/masuk`, minimal 32 karakter |
+| `OUTBOUND_TRUST_PLATFORM_AUTH` | self-host | `false` bila tidak ada auth proxy platform di depan aplikasi |
 | `OUTBOUND_WAREHOUSE_CODE` | bootstrap | kode warehouse, contoh `CBT` |
 | `OUTBOUND_WAREHOUSE_NAME` | bootstrap | nama warehouse |
 | `OUTBOUND_WAREHOUSE_TIMEZONE` | bootstrap | zona waktu IANA |
@@ -570,6 +576,7 @@ Hanya variable berprefix `OUTBOUND_` dan `SUPERSET_` yang diteruskan menjadi bin
 
 ```text
 OUTBOUND_ADMIN_EMAILS
+OUTBOUND_ADMIN_TOKEN
 OUTBOUND_ALLOW_ANONYMOUS_READ
 OUTBOUND_WAREHOUSE_CODE
 OUTBOUND_WAREHOUSE_NAME
@@ -587,6 +594,25 @@ Variable khusus container:
 | `OUTBOUND_STATE_DIR` | `/data/wrangler-state` | lokasi state D1 dan R2 |
 
 Entry point menulis variable tersebut ke file env dengan permission `600` di luar volume agar tidak tersimpan melebihi umur container, lalu mencatat nama variable saja pada log. Nilai cookie dan encryption key tidak pernah dicetak.
+
+### Akses admin
+
+Pada Sites, identitas operator berasal dari header `oai-authenticated-user-email` yang dikontrol auth proxy platform. Reverse proxy biasa meneruskan header klien apa adanya, sehingga di runtime self-host header tersebut **tidak boleh** dipercaya: siapa pun bisa mengirimkannya dan mengaku admin. Karena itu image menyetel `OUTBOUND_TRUST_PLATFORM_AUTH=false`, dan admin masuk lewat token.
+
+1. Buat token minimal 32 karakter:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+2. Set `OUTBOUND_ADMIN_TOKEN` pada environment Coolify, dan pastikan email operator ada di `OUTBOUND_ADMIN_EMAILS`.
+3. Buka `/masuk`, isi email dan token, lalu kembali ke Konfigurasi.
+
+Server mengeluarkan cookie sesi bertanda tangan HMAC-SHA256 dengan atribut `HttpOnly`, `SameSite=Strict`, dan `Secure` bila diakses melalui HTTPS. Sesi berlaku 12 jam. Allowlist `OUTBOUND_ADMIN_EMAILS` diperiksa ulang pada setiap request, jadi menghapus satu email langsung mencabut aksesnya tanpa menunggu cookie kedaluwarsa. Token hanya diverifikasi lewat perbandingan digest, dan email salah maupun token salah dijawab identik agar daftar admin tidak bisa ditebak.
+
+Jalankan aplikasi di belakang HTTPS. Tanpa TLS, atribut `Secure` tidak dipasang dan cookie sesi melintas sebagai teks biasa.
+
+Bila memakai auth proxy sendiri (oauth2-proxy, Authelia, Cloudflare Access) yang menghapus header identitas dari klien lalu menyuntikkannya sendiri, `OUTBOUND_TRUST_PLATFORM_AUTH` boleh dikembalikan ke `true`. Jangan lakukan itu tanpa proxy semacam ini.
 
 ### Verifikasi lokal sebelum push
 
@@ -707,6 +733,10 @@ Tujuan baru tetap muncul otomatis dari data sebagai `UNMAPPED`. Tambahkan rule W
 ### Windows `EPERM ... dist/server/.wrangler`
 
 Server preview lama masih mengunci folder build. Hentikan proses `wrangler dev`, lalu jalankan ulang build. Jangan menghapus workspace secara rekursif.
+
+### "Sample fallback aktif" saat Simpan koneksi atau sync manual
+
+Request tidak membawa identitas admin, sehingga route menjawab `401 AUTH_REQUIRED` dan provider jatuh ke sample. Pada deployment self-host, buka `/masuk` lalu masuk memakai `OUTBOUND_ADMIN_TOKEN`. Jika halaman itu menyatakan masuk admin belum aktif, token belum diset atau kurang dari 32 karakter. Jika masuk ditolak, email belum terdaftar di `OUTBOUND_ADMIN_EMAILS`.
 
 ### Coolify `failed to read dockerfile`
 
