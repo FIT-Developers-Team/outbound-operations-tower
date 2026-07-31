@@ -44,10 +44,12 @@ const listenPort = process.env.PORT ?? "3000";
 const RUNTIME_VARIABLE_PREFIXES = ["OUTBOUND_", "SUPERSET_"];
 const EXCLUDED_VARIABLES = new Set(["OUTBOUND_STATE_DIR"]);
 
+// Mirrors the minimum enforced by lib/admin-session.ts.
+const MINIMUM_ADMIN_TOKEN_LENGTH = 32;
+
 // Mirrors the minimum environment documented in README.
 const EXPECTED_VARIABLES = [
   "OUTBOUND_ADMIN_EMAILS",
-  "OUTBOUND_ADMIN_TOKEN",
   "OUTBOUND_ALLOW_ANONYMOUS_READ",
   "OUTBOUND_WAREHOUSE_CODE",
   "OUTBOUND_WAREHOUSE_NAME",
@@ -124,6 +126,21 @@ const missingVariables = EXPECTED_VARIABLES.filter(
 if (missingVariables.length > 0) {
   console.warn(
     `Peringatan: variable minimum belum diset: ${missingVariables.join(", ")}.`,
+  );
+}
+
+// Without platform auth the token is the only way to become admin, and a token
+// that is absent or too short disables sign-in silently. Saying so at start-up
+// keeps that from surfacing later as an unexplained 401 in the workspace.
+const adminToken = process.env.OUTBOUND_ADMIN_TOKEN?.trim() ?? "";
+const platformAuthTrusted =
+  process.env.OUTBOUND_TRUST_PLATFORM_AUTH?.trim().toLowerCase() !== "false";
+
+if (!platformAuthTrusted && adminToken.length < MINIMUM_ADMIN_TOKEN_LENGTH) {
+  console.warn(
+    adminToken.length === 0
+      ? "Peringatan: OUTBOUND_ADMIN_TOKEN belum diset. Masuk admin nonaktif, sehingga Simpan koneksi dan sync manual akan ditolak 401."
+      : `Peringatan: OUTBOUND_ADMIN_TOKEN hanya ${adminToken.length} karakter, minimal ${MINIMUM_ADMIN_TOKEN_LENGTH}. Masuk admin tetap nonaktif sampai diperbaiki.`,
   );
 }
 

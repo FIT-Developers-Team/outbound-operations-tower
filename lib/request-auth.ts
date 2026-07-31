@@ -3,11 +3,7 @@ import {
   getChatGPTUser,
   type ChatGPTUser,
 } from "@/app/chatgpt-auth";
-import {
-  ADMIN_SESSION_COOKIE,
-  adminSignInEnabled,
-  readAdminSession,
-} from "./admin-session";
+import { ADMIN_SESSION_COOKIE, readAdminSession } from "./admin-session";
 import { runtimeEnv, runtimeFlag } from "./runtime-env";
 
 export type OutboundAccess = {
@@ -108,7 +104,10 @@ export function authRequiredMessage(request: NextRequest) {
   if (isLocalRequest(request)) {
     return "Preview lokal belum diberi izin. Siapkan .dev.vars lalu jalankan ulang npm run start.";
   }
-  return adminSignInEnabled()
-    ? "Masuk diperlukan untuk mengakses data outbound. Buka /masuk lalu masuk sebagai admin."
-    : "Masuk diperlukan untuk mengakses data outbound.";
+  // A self-hosted runtime has no platform sign-in to fall back on, so the
+  // operator is always sent to /masuk. That page reports whether the token is
+  // missing or too short, which this message cannot do on its own.
+  return platformAuthTrusted()
+    ? "Masuk diperlukan untuk mengakses data outbound."
+    : "Masuk diperlukan untuk mengakses data outbound. Buka /masuk untuk masuk sebagai admin.";
 }

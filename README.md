@@ -734,9 +734,22 @@ Tujuan baru tetap muncul otomatis dari data sebagai `UNMAPPED`. Tambahkan rule W
 
 Server preview lama masih mengunci folder build. Hentikan proses `wrangler dev`, lalu jalankan ulang build. Jangan menghapus workspace secara rekursif.
 
-### "Sample fallback aktif" saat Simpan koneksi atau sync manual
+### "Masuk diperlukan untuk mengakses data outbound" saat Simpan koneksi atau sync
 
-Request tidak membawa identitas admin, sehingga route menjawab `401 AUTH_REQUIRED` dan provider jatuh ke sample. Pada deployment self-host, buka `/masuk` lalu masuk memakai `OUTBOUND_ADMIN_TOKEN`. Jika halaman itu menyatakan masuk admin belum aktif, token belum diset atau kurang dari 32 karakter. Jika masuk ditolak, email belum terdaftar di `OUTBOUND_ADMIN_EMAILS`.
+Request tidak membawa identitas admin, sehingga route menjawab `401 AUTH_REQUIRED` dan provider jatuh ke sample. Pastikan dulu status masuk pada deployment:
+
+```bash
+curl -s https://DOMAIN/api/outbound/session
+```
+
+| Hasil | Arti | Tindakan |
+|---|---|---|
+| `404` | build lama masih berjalan | periksa log deployment, pastikan commit terbaru benar-benar ter-build |
+| `"signInEnabled":false` | token belum sampai ke Worker | set `OUTBOUND_ADMIN_TOKEN` minimal 32 karakter lalu deploy ulang |
+| `"signInEnabled":true` | konfigurasi sudah benar | buka `/masuk`, masuk memakai email dan token |
+| masuk ditolak | email belum terdaftar | tambahkan email ke `OUTBOUND_ADMIN_EMAILS` |
+
+Log start-up container juga menyebutkan secara eksplisit bila token belum diset atau terlalu pendek. Panjang token dicetak, nilainya tidak.
 
 ### Coolify `failed to read dockerfile`
 

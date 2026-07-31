@@ -57,6 +57,27 @@ test("identity header alone cannot grant admin without a platform proxy", async 
   assert.match(await response.text(), /AUTH_REQUIRED/);
 });
 
+test("a self-hosted rejection tells the operator where to sign in", async () => {
+  const response = await saveConnector({});
+  const payload = await response.json();
+
+  assert.equal(response.status, 401);
+  assert.match(payload.message, /\/masuk/);
+});
+
+test("the sign-in hint survives a token that is missing or too short", async () => {
+  process.env.OUTBOUND_ADMIN_TOKEN = "too-short";
+  try {
+    const response = await saveConnector({});
+    const payload = await response.json();
+
+    assert.equal(response.status, 401);
+    assert.match(payload.message, /\/masuk/);
+  } finally {
+    process.env.OUTBOUND_ADMIN_TOKEN = ADMIN_TOKEN;
+  }
+});
+
 test("sign-in answers wrong token and wrong email identically", async () => {
   const wrongToken = await signIn({
     email: ADMIN_EMAIL,
