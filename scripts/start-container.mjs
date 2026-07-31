@@ -44,8 +44,9 @@ const listenPort = process.env.PORT ?? "3000";
 const RUNTIME_VARIABLE_PREFIXES = ["OUTBOUND_", "SUPERSET_"];
 const EXCLUDED_VARIABLES = new Set(["OUTBOUND_STATE_DIR"]);
 
-// Mirrors the minimum enforced by lib/admin-session.ts.
+// Mirrors the minimums enforced by lib/admin-session.ts and lib/runtime-storage.ts.
 const MINIMUM_ADMIN_TOKEN_LENGTH = 32;
+const MINIMUM_SECRET_LENGTH = 32;
 
 // Mirrors the minimum environment documented in README.
 const EXPECTED_VARIABLES = [
@@ -55,7 +56,6 @@ const EXPECTED_VARIABLES = [
   "OUTBOUND_WAREHOUSE_NAME",
   "OUTBOUND_WAREHOUSE_TIMEZONE",
   "SUPERSET_ALLOWED_HOSTS",
-  "SUPERSET_COOKIE_ENCRYPTION_KEY",
 ];
 
 function fail(message) {
@@ -141,6 +141,16 @@ if (!platformAuthTrusted && adminToken.length < MINIMUM_ADMIN_TOKEN_LENGTH) {
     adminToken.length === 0
       ? "Peringatan: OUTBOUND_ADMIN_TOKEN belum diset. Masuk admin nonaktif, sehingga Simpan koneksi dan sync manual akan ditolak 401."
       : `Peringatan: OUTBOUND_ADMIN_TOKEN hanya ${adminToken.length} karakter, minimal ${MINIMUM_ADMIN_TOKEN_LENGTH}. Masuk admin tetap nonaktif sampai diperbaiki.`,
+  );
+}
+
+// The encryption key is optional; the runtime generates and stores one when
+// none is supplied. A value that is present but unusable would otherwise be
+// ignored without explanation.
+const encryptionKey = process.env.SUPERSET_COOKIE_ENCRYPTION_KEY?.trim() ?? "";
+if (encryptionKey.length > 0 && encryptionKey.length < MINIMUM_SECRET_LENGTH) {
+  console.warn(
+    `Peringatan: SUPERSET_COOKIE_ENCRYPTION_KEY hanya ${encryptionKey.length} karakter, minimal ${MINIMUM_SECRET_LENGTH}. Kunci yang dibuat otomatis dan tersimpan di D1 dipakai sebagai gantinya.`,
   );
 }
 

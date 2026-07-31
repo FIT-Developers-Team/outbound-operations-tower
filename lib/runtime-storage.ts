@@ -5,9 +5,22 @@ import type {
 } from "./outbound-types";
 import { runtimeEnv } from "./runtime-env";
 
-async function runtimeBindings() {
-  const runtime = await import("cloudflare:workers");
-  return runtime.env;
+type RuntimeBindings = {
+  DB?: D1Database;
+  SNAPSHOTS?: R2Bucket;
+};
+
+async function runtimeBindings(): Promise<RuntimeBindings> {
+  try {
+    const runtime = await import("cloudflare:workers");
+    return runtime.env as RuntimeBindings;
+  } catch {
+    // Tests import the built Worker under Node, where `cloudflare:workers` does
+    // not resolve. The entry point publishes the same bindings on a global
+    // before handling a request, which is the bridge runtime-env.ts already
+    // relies on for variables.
+    return (globalThis.__OUTBOUND_RUNTIME_ENV__ ?? {}) as RuntimeBindings;
+  }
 }
 
 const DEFAULT_PATH =
@@ -17,7 +30,10 @@ const LEGACY_CSV_PATH =
 const CONNECTOR_ID = "primary";
 const SNAPSHOT_ID = "current";
 const SNAPSHOT_KEY = "snapshots/current.json";
+const COOKIE_SECRET_NAME = "superset_cookie_encryption_key";
+const MINIMUM_SECRET_LENGTH = 32;
 let schemaReady: Promise<boolean> | null = null;
+let generatedSecretCache: string | null = null;
 
 function normalizeExportPath(pathTemplate: string | null | undefined) {
   const path = pathTemplate?.trim();
@@ -147,6 +163,13 @@ async function initializeRuntimeSchema() {
     db.prepare(
       "CREATE INDEX IF NOT EXISTS sync_runs_status_idx ON sync_runs (status)",
     ),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS runtime_secrets (
+        name TEXT PRIMARY KEY NOT NULL,
+        value TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )
+    `),
     db.prepare(`
       CREATE TABLE IF NOT EXISTS dataset_snapshots (
         id TEXT PRIMARY KEY NOT NULL,
@@ -423,16 +446,62 @@ function fromBase64(value: string) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
 
-async function cookieKey() {
+export function environmentCookieSecret() {
   const secret = runtimeEnv("SUPERSET_COOKIE_ENCRYPTION_KEY")?.trim() ?? "";
-  if (secret.length < 32) {
+  return secret.length >= MINIMUM_SECRET_LENGTH ? secret : null;
+}
+
+/**
+ * A deployment that supplies the key through the environment keeps full
+ * control of it. Everything else gets a key generated once and kept in D1, so
+ * a self-hosted runtime needs no manual secret and cookies encrypted earlier
+ * stay readable across redeploys.
+ *
+ * Trade-off worth knowing: a generated key lives in the same database as the
+ * ciphertext it protects, so anyone who can read that database can read the
+ * cookie. Set the environment variable when the key must live elsewhere.
+ */
+async function cookieSecret() {
+  const fromEnvironment = environmentCookieSecret();
+  if (fromEnvironment) return fromEnvironment;
+  if (generatedSecretCache) return generatedSecretCache;
+
+  const env = await runtimeBindings();
+  if (!env.DB) {
     throw new Error(
-      "SUPERSET_COOKIE_ENCRYPTION_KEY minimal 32 karakter belum dikonfigurasi.",
+      "Kunci enkripsi cookie tidak tersedia. Set SUPERSET_COOKIE_ENCRYPTION_KEY minimal 32 karakter, atau sediakan binding D1 agar kunci dapat dibuat otomatis.",
     );
   }
+  await ensureRuntimeSchema();
+
+  // Insert-or-ignore then read back. Two first requests racing each other must
+  // not each store a different key and leave one of them unable to decrypt.
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO runtime_secrets (name, value, created_at) VALUES (?1, ?2, ?3)",
+  )
+    .bind(
+      COOKIE_SECRET_NAME,
+      toBase64(crypto.getRandomValues(new Uint8Array(32))),
+      new Date().toISOString(),
+    )
+    .run();
+
+  const row = await env.DB.prepare(
+    "SELECT value FROM runtime_secrets WHERE name = ?1",
+  )
+    .bind(COOKIE_SECRET_NAME)
+    .first<{ value: string }>();
+  if (!row?.value) {
+    throw new Error("Kunci enkripsi cookie gagal disiapkan pada D1.");
+  }
+  generatedSecretCache = row.value;
+  return generatedSecretCache;
+}
+
+async function cookieKey() {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(secret),
+    new TextEncoder().encode(await cookieSecret()),
   );
   return crypto.subtle.importKey("raw", digest, "AES-GCM", false, [
     "encrypt",
@@ -502,8 +571,14 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
         : "none",
     cookieExpiresAt: connector.cookieExpiresAt,
     cookieUpdatedAt: connector.cookieUpdatedAt,
-    encryptionReady:
-      (runtimeEnv("SUPERSET_COOKIE_ENCRYPTION_KEY")?.trim().length ?? 0) >= 32,
+    // Encryption is ready when a key can be obtained, whether it comes from the
+    // environment or is generated into D1 on first use.
+    encryptionReady: Boolean(environmentCookieSecret()) || Boolean(env.DB),
+    encryptionKeySource: environmentCookieSecret()
+      ? "environment"
+      : env.DB
+        ? "generated"
+        : "none",
     health: cookieExpired ? "EXPIRED" : connector.health,
     lastMessage: connector.lastMessage,
     lastVerifiedAt: connector.lastVerifiedAt,

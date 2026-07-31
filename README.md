@@ -299,7 +299,7 @@ Variable penting:
 | `SUPERSET_STAFF_SLICE_ID` | bootstrap | numeric Slice ID staff |
 | `SUPERSET_EXPORT_PATH_TEMPLATE` | opsional | default endpoint JSON saved chart |
 | `SUPERSET_REFRESH_INTERVAL_MINUTES` | opsional | 1–60 menit |
-| `SUPERSET_COOKIE_ENCRYPTION_KEY` | production | secret minimal 32 karakter |
+| `SUPERSET_COOKIE_ENCRYPTION_KEY` | opsional | secret minimal 32 karakter; tanpa ini kunci dibuat otomatis dan disimpan di D1 |
 | `SUPERSET_SESSION_COOKIE` | opsional | bootstrap cookie melalui secret env |
 | `SUPERSET_COOKIE_EXPIRES_AT` | opsional | waktu kedaluwarsa ISO 8601 |
 
@@ -582,8 +582,19 @@ OUTBOUND_WAREHOUSE_CODE
 OUTBOUND_WAREHOUSE_NAME
 OUTBOUND_WAREHOUSE_TIMEZONE
 SUPERSET_ALLOWED_HOSTS
-SUPERSET_COOKIE_ENCRYPTION_KEY
 ```
+
+`SUPERSET_COOKIE_ENCRYPTION_KEY` sengaja tidak ada pada daftar tersebut. Lihat bagian berikut.
+
+### Kunci enkripsi cookie
+
+Kunci ini tidak perlu dikonfigurasi. Saat tidak ada `SUPERSET_COOKIE_ENCRYPTION_KEY` yang valid, runtime membuat kunci acak 32 byte pada pemakaian pertama lalu menyimpannya di tabel `runtime_secrets` pada D1. Karena D1 berada di volume `/data`, kunci tersebut bertahan melewati redeploy dan cookie yang sudah dienkripsi tetap terbaca. Tidak ada kunci yang perlu dirotasi manual, dan tidak ada lagi kegagalan "belum dikonfigurasi".
+
+Penyisipannya memakai `INSERT OR IGNORE` lalu dibaca ulang, sehingga dua request pertama yang datang bersamaan tidak dapat menyimpan dua kunci berbeda.
+
+Halaman Konfigurasi menampilkan sumber kunci yang sedang dipakai pada baris Enkripsi: `kunci environment` atau `kunci tersimpan`.
+
+Konsekuensi yang perlu diketahui: kunci hasil generate berada pada database yang sama dengan ciphertext yang dilindunginya, jadi siapa pun yang bisa membaca database itu dapat membaca cookie. Set `SUPERSET_COOKIE_ENCRYPTION_KEY` bila kunci harus berada di luar database. Berpindah antara kedua mode membuat cookie lama tidak terbaca; cukup tempel ulang cookie melalui halaman Konfigurasi.
 
 Variable khusus container:
 
@@ -750,6 +761,12 @@ curl -s https://DOMAIN/api/outbound/session
 | masuk ditolak | email belum terdaftar | tambahkan email ke `OUTBOUND_ADMIN_EMAILS` |
 
 Log start-up container juga menyebutkan secara eksplisit bila token belum diset atau terlalu pendek. Panjang token dicetak, nilainya tidak.
+
+### `SUPERSET_COOKIE_ENCRYPTION_KEY minimal 32 karakter belum dikonfigurasi`
+
+Pesan tersebut berasal dari runtime lama yang mewajibkan kunci dari environment. Runtime sekarang membuat dan menyimpan kunci sendiri ketika environment tidak menyediakannya, sehingga kegagalan ini tidak muncul lagi selama binding D1 tersedia. Bila tetap muncul, deployment masih memakai build lama, atau binding D1 tidak terpasang sehingga kunci tidak dapat disimpan.
+
+Bila kunci diisi tetapi tetap tidak terpakai, periksa panjangnya. Nilai di bawah 32 karakter diabaikan, dan log start-up container menyebutkan jumlah karakternya.
 
 ### Build gagal pada `resolve image config for docker-image://docker.io/docker/dockerfile`
 

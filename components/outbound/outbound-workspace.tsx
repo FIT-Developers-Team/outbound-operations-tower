@@ -2785,7 +2785,7 @@ function ConnectorSettings({ data }: { data: DemoDataset }) {
           <span className="eyebrow">Status koneksi</span>
           <dl>
             <div><dt>Cookie</dt><dd>{config?.cookiePresent ? `Tersedia · ${config.cookieSource}` : "Belum ada"}</dd></div>
-            <div><dt>Enkripsi</dt><dd>{config?.encryptionReady ? "AES-GCM siap" : "Secret belum diatur"}</dd></div>
+            <div><dt>Enkripsi</dt><dd>{config?.encryptionReady ? `AES-GCM siap · kunci ${config.encryptionKeySource === "environment" ? "environment" : "tersimpan"}` : "Secret belum diatur"}</dd></div>
             <div><dt>Terakhir diperbarui</dt><dd>{config?.cookieUpdatedAt ? new Date(config.cookieUpdatedAt).toLocaleString("id-ID") : "-"}</dd></div>
             <div><dt>Terakhir sync</dt><dd>{config?.lastRunAt ? new Date(config.lastRunAt).toLocaleString("id-ID") : "-"}</dd></div>
             <div><dt>Refresh</dt><dd>Setiap {config?.refreshIntervalMinutes ?? form.refreshIntervalMinutes} menit</dd></div>

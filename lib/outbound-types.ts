@@ -281,6 +281,7 @@ export type ConnectorPublicConfig = {
   cookieExpiresAt: string | null;
   cookieUpdatedAt: string | null;
   encryptionReady: boolean;
+  encryptionKeySource: "environment" | "generated" | "none";
   health: SyncHealth;
   lastMessage: string | null;
   lastVerifiedAt: string | null;

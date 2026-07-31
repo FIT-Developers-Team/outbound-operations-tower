@@ -63,3 +63,12 @@ export const datasetSnapshots = sqliteTable("dataset_snapshots", {
   syncedAt: text("synced_at").notNull(),
   runId: text("run_id").notNull(),
 });
+
+// Secrets the deployment generates for itself when the environment supplies
+// none. Rows are written once and then read for the lifetime of the database,
+// so material encrypted under a generated key stays readable across redeploys.
+export const runtimeSecrets = sqliteTable("runtime_secrets", {
+  name: text("name").primaryKey(),
+  value: text("value").notNull(),
+  createdAt: text("created_at").notNull(),
+});
