@@ -154,7 +154,12 @@ const miniflare = new Miniflare({
 });
 
 await miniflare.ready;
-console.log(`Siap pada http://${host}:${port}`);
+
+// 0.0.0.0 is a bind address, not one a browser can open. Printing it sends
+// people to `localhost`, which on Windows resolves to ::1 first and can reach
+// a different process that holds the same port on IPv6.
+const reachableHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+console.log(`Siap pada http://${reachableHost}:${port} (bind ${host})`);
 
 let closing = false;
 for (const signal of ["SIGINT", "SIGTERM"]) {
