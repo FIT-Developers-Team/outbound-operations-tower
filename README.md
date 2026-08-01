@@ -236,8 +236,7 @@ lib/
   runtime-storage.ts       D1, R2, ETag, enkripsi cookie
   superset-sync.ts         fetch, parse, transform, filter metadata
 scripts/
-  start-local.mjs          runtime Wrangler lokal
-  start-container.mjs      entry point container self-host
+  serve.mjs                server produksi Miniflare
 tests/                     unit, route, auth, rendering, asset
 worker/index.ts            Worker entry + security headers
 ```
@@ -273,13 +272,13 @@ Untuk UI Vite:
 Copy-Item .env.example .env.local
 ```
 
-Untuk runtime Wrangler production-like:
+Untuk runtime production-like:
 
 ```powershell
 Copy-Item .dev.vars.example .dev.vars
 ```
 
-`.env.local` tidak otomatis dibaca oleh `wrangler dev`. Script `npm start` secara eksplisit memakai `--env-file .dev.vars`. File `.dev.vars` di-ignore Git; hanya `.dev.vars.example` yang boleh di-commit.
+`.env.local` dipakai Vite saat `npm run dev`. `npm start` membaca `.dev.vars` melalui `--env-file-if-exists` milik Node. File `.dev.vars` di-ignore Git; hanya `.dev.vars.example` yang boleh di-commit.
 
 Variable penting:
 
@@ -326,7 +325,7 @@ npm run build
 npm start
 ```
 
-`npm start` adalah server long-running. Terminal harus tetap terbuka. Hentikan dengan `Ctrl+C`; respons API 401 tidak menghentikan proses.
+`npm start` menjalankan `scripts/serve.mjs`, server yang sama dengan produksi. Terminal harus tetap terbuka. Hentikan dengan `Ctrl+C`; respons API 401 tidak menghentikan proses.
 
 Uji:
 
@@ -546,7 +545,9 @@ Setiap deployment URL Sites adalah production URL. Gunakan akses private kecuali
 
 ## Deployment ke Coolify (Docker)
 
-`Dockerfile` di root menyediakan runtime self-host. Build stage menjalankan `npm ci` dan `npm run build`; runtime stage menjalankan workerd melalui `wrangler dev`. Base image memakai Debian slim karena Cloudflare hanya merilis workerd untuk glibc, sehingga Alpine tidak dapat dipakai.
+`Dockerfile` di root menyediakan runtime self-host. Build stage menjalankan `npm ci` dan `npm run build`; runtime stage menjalankan `scripts/serve.mjs`, yang menyalakan workerd langsung melalui Miniflare. Base image memakai Debian slim karena Cloudflare hanya merilis workerd untuk glibc, sehingga Alpine tidak dapat dipakai.
+
+`wrangler dev` sengaja tidak dipakai di produksi. Itu harness pengembangan: ia menyalakan esbuild, inspector, file watcher, dan dev registry. Pada mesin uji yang sama, pohon prosesnya 6 proses dan 527 MB RAM, sedangkan Miniflare langsung 2 proses dan 204 MB.
 
 ### Perbedaan dengan Sites
 
@@ -675,7 +676,7 @@ Migration `drizzle/*.sql` diterapkan otomatis pada setiap start dan bersifat ide
 
 ### `GET /api/outbound/config 401 Unauthorized` saat localhost
 
-Penyebab paling umum: runtime Wrangler tidak memuat variable local admin. Pastikan:
+Penyebab paling umum: runtime tidak memuat variable local admin. Pastikan:
 
 ```powershell
 Copy-Item .dev.vars.example .dev.vars
@@ -707,7 +708,7 @@ Jalankan server di terminal terpisah dan biarkan tetap terbuka. Pesan UI kini me
 
 ### `npm start` tiba-tiba berhenti
 
-Respons route 401 tidak mematikan Wrangler. Baca log Wrangler paling akhir dan cari error setelah proses berakhir. Jika log hanya menunjukkan proxy/controller disconnect setelah durasi panjang, proses kemungkinan ditutup, terminal terputus, komputer sleep, atau port direbut proses lain.
+Respons route 401 tidak mematikan server. Baca log paling akhir dan cari error setelah proses berakhir. Proses kemungkinan ditutup, terminal terputus, komputer sleep, atau port direbut proses lain.
 
 ### Sync Superset 401/403
 
@@ -743,7 +744,7 @@ Tujuan baru tetap muncul otomatis dari data sebagai `UNMAPPED`. Tambahkan rule W
 
 ### Windows `EPERM ... dist/server/.wrangler`
 
-Server preview lama masih mengunci folder build. Hentikan proses `wrangler dev`, lalu jalankan ulang build. Jangan menghapus workspace secara rekursif.
+Server preview lama masih mengunci folder build. Hentikan proses server (`npm start`), lalu jalankan ulang build. Jangan menghapus workspace secara rekursif.
 
 ### "Masuk diperlukan untuk mengakses data outbound" saat Simpan koneksi atau sync
 

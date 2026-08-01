@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   BookOpen,
@@ -74,6 +74,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [commandQuery, setCommandQuery] = useState("");
   const [dark, setDark] = useState(false);
   const [autoSyncMinutes, setAutoSyncMinutes] = useState(5);
+  const lastAutoSync = useRef(0);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -127,13 +128,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     });
   }, [refresh]);
 
+  // A hidden tab must not wake the device. The interval is torn down instead of
+  // fired-and-ignored, and a tab that comes back only syncs when its turn was
+  // actually missed, so switching tabs cannot produce a burst of requests.
   useEffect(() => {
     if (paused) return;
-    const timer = window.setInterval(
-      () => void runAutoSync(),
-      autoSyncMinutes * 60_000,
-    );
-    return () => window.clearInterval(timer);
+    const period = autoSyncMinutes * 60_000;
+    let timer = 0;
+
+    const tick = () => {
+      lastAutoSync.current = Date.now();
+      void runAutoSync();
+    };
+    const start = () => {
+      window.clearInterval(timer);
+      timer = window.setInterval(tick, period);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") {
+        window.clearInterval(timer);
+        return;
+      }
+      start();
+      if (Date.now() - lastAutoSync.current >= period) tick();
+    };
+
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [autoSyncMinutes, paused, runAutoSync]);
 
   useEffect(() => {
