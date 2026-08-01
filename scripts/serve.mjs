@@ -76,14 +76,22 @@ bindings.OUTBOUND_TRUST_PLATFORM_AUTH =
   process.env.OUTBOUND_TRUST_PLATFORM_AUTH ?? "false";
 
 const adminToken = process.env.OUTBOUND_ADMIN_TOKEN?.trim() ?? "";
+// The localhost bypass still grants admin without a token, so saying the
+// request will be refused would be wrong on a developer machine.
+const localAdmin =
+  process.env.OUTBOUND_ALLOW_LOCAL_ADMIN?.trim().toLowerCase() === "true";
 if (
   bindings.OUTBOUND_TRUST_PLATFORM_AUTH === "false" &&
   adminToken.length < MINIMUM_SECRET_LENGTH
 ) {
-  console.warn(
+  const reason =
     adminToken.length === 0
-      ? "Peringatan: OUTBOUND_ADMIN_TOKEN belum diset. Masuk admin nonaktif, sehingga Simpan koneksi dan sync manual akan ditolak 401."
-      : `Peringatan: OUTBOUND_ADMIN_TOKEN hanya ${adminToken.length} karakter, minimal ${MINIMUM_SECRET_LENGTH}. Masuk admin tetap nonaktif.`,
+      ? "OUTBOUND_ADMIN_TOKEN belum diset"
+      : `OUTBOUND_ADMIN_TOKEN hanya ${adminToken.length} karakter, minimal ${MINIMUM_SECRET_LENGTH}`;
+  console.warn(
+    localAdmin
+      ? `Peringatan: ${reason}. Admin hanya berlaku lewat hostname localhost karena OUTBOUND_ALLOW_LOCAL_ADMIN aktif; lewat domain akan ditolak 401.`
+      : `Peringatan: ${reason}. Masuk admin nonaktif, sehingga Simpan koneksi dan sync manual akan ditolak 401.`,
   );
 }
 
