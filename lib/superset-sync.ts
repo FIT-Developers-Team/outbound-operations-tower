@@ -204,16 +204,35 @@ async function fetchExport(
   month: ReturnType<typeof jakartaMonth>,
 ): Promise<ExportResult> {
   const url = exportUrl(baseUrl, pathTemplate, sliceId, month);
-  const response = await fetch(url, {
-    headers: {
-      Accept: "text/csv, application/json;q=0.9",
-      Cookie: cookie,
-      "User-Agent": "CBT-Outbound-Hub/1.0",
-    },
-    cache: "no-store",
-    redirect: "manual",
-    signal: AbortSignal.timeout(55_000),
-  });
+  // The runtime reports an unreachable host as `internal error; reference = ...`,
+  // which tells an operator nothing about what to fix. Name the host and the
+  // kind of failure instead.
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: "text/csv, application/json;q=0.9",
+        Cookie: cookie,
+        "User-Agent": "CBT-Outbound-Hub/1.0",
+      },
+      cache: "no-store",
+      redirect: "manual",
+      signal: AbortSignal.timeout(55_000),
+    });
+  } catch (caught) {
+    const host = new URL(url).host;
+    const name = caught instanceof Error ? caught.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new Error(
+        `Superset di ${host} tidak merespons dalam 55 detik. Periksa beban chart atau koneksi ke host tersebut.`,
+      );
+    }
+    const detail =
+      caught instanceof Error && caught.message ? ` (${caught.message})` : "";
+    throw new Error(
+      `Superset di ${host} tidak dapat dihubungi dari server aplikasi. Periksa DNS dan akses jaringan keluar dari container.${detail}`,
+    );
+  }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if ([301, 302, 303, 307, 308, 401, 403].includes(response.status)) {
     throw new Error(
@@ -223,7 +242,16 @@ async function fetchExport(
   if (!response.ok) {
     throw new Error(`Export slice ${sliceId} gagal (${response.status}).`);
   }
-  const body = await response.text();
+  let body: string;
+  try {
+    body = await response.text();
+  } catch (caught) {
+    const detail =
+      caught instanceof Error && caught.message ? ` (${caught.message})` : "";
+    throw new Error(
+      `Export slice ${sliceId} terputus saat diunduh. Kemungkinan ukurannya melampaui batas memori runtime.${detail}`,
+    );
+  }
   if (
     contentType.includes("text/html") ||
     /<title>.*(login|sign in)/i.test(body.slice(0, 4_000))
