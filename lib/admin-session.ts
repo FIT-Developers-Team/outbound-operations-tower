@@ -8,8 +8,25 @@ import { runtimeEnv } from "./runtime-env";
  * with a shared token and receives an HMAC-signed session cookie in return.
  */
 export const ADMIN_SESSION_COOKIE = "outbound_admin_session";
-export const ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60;
 const MINIMUM_TOKEN_LENGTH = 32;
+const DEFAULT_SESSION_DAYS = 30;
+const MAXIMUM_SESSION_DAYS = 365;
+
+/**
+ * How long a signed-in operator stays signed in. A session that never expires
+ * would mean a stolen cookie is valid forever, so the ceiling stays finite.
+ * Access is not tied to it either way: the allowlist is re-read on every
+ * request, so removing an address from OUTBOUND_ADMIN_EMAILS ends that
+ * operator's access immediately regardless of how long their cookie has left.
+ */
+export function adminSessionTtlSeconds() {
+  const configured = Number(runtimeEnv("OUTBOUND_ADMIN_SESSION_DAYS"));
+  const days =
+    Number.isFinite(configured) && configured > 0
+      ? Math.min(configured, MAXIMUM_SESSION_DAYS)
+      : DEFAULT_SESSION_DAYS;
+  return Math.round(days * 24 * 60 * 60);
+}
 
 type SessionPayload = {
   email: string;
@@ -64,7 +81,7 @@ async function signingKey() {
 export async function createAdminSession(email: string) {
   const payload: SessionPayload = {
     email,
-    exp: Math.floor(Date.now() / 1000) + ADMIN_SESSION_TTL_SECONDS,
+    exp: Math.floor(Date.now() / 1000) + adminSessionTtlSeconds(),
   };
   const body = toBase64Url(
     new TextEncoder().encode(JSON.stringify(payload)),

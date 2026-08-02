@@ -117,11 +117,21 @@ export function ConnectorSettings({ data }: { data: DemoDataset }) {
         }),
       );
       setFeedback("Koneksi tersimpan. Jalankan sync untuk menguji sesi.");
+      return true;
     } catch (caught) {
       setFeedback(caught instanceof Error ? caught.message : "Gagal menyimpan.");
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  // The sync reads the stored connector, never the form. Testing without
+  // saving first would quietly exercise the previous configuration and report
+  // its failure against values the operator can see on screen but has not sent.
+  async function saveThenSync() {
+    if (!(await save())) return;
+    await refresh({ forceSource: true, sourceMode: "manual" });
   }
 
   return (
@@ -154,7 +164,7 @@ export function ConnectorSettings({ data }: { data: DemoDataset }) {
           </fieldset>
           <div className="page-action-row">
             <button className="btn" disabled={saving} onClick={() => void save()} type="button">{saving ? "Menyimpan…" : "Simpan koneksi"}</button>
-            <button className="btn btn-primary" disabled={phase === "syncing"} onClick={() => void refresh({ forceSource: true, sourceMode: "manual" })} type="button">{phase === "syncing" ? "Menyinkronkan…" : "Uji dan tarik data"}</button>
+            <button className="btn btn-primary" disabled={saving || phase === "syncing"} onClick={() => void saveThenSync()} type="button">{saving ? "Menyimpan…" : phase === "syncing" ? "Menyinkronkan…" : "Simpan dan uji tarik data"}</button>
           </div>
           {feedback && <p className="section-note">{feedback}</p>}
         </div>

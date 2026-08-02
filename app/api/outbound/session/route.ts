@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   ADMIN_SESSION_COOKIE,
-  ADMIN_SESSION_TTL_SECONDS,
+  adminSessionTtlSeconds,
   adminSignInEnabled,
   adminTokenMatches,
   createAdminSession,
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
     secure: isSecureRequest(request),
     sameSite: "strict",
     path: "/",
-    maxAge: ADMIN_SESSION_TTL_SECONDS,
+    maxAge: adminSessionTtlSeconds(),
   });
   return response;
 }
