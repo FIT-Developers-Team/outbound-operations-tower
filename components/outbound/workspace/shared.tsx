@@ -120,11 +120,22 @@ export function Modal({
 }) {
   const titleId = useId();
   const closeButton = useRef<HTMLButtonElement>(null);
+  const close = useRef(onClose);
 
+  // Callers pass an inline arrow, so onClose is a new value on every render.
+  // Reading it through a ref keeps the effect below tied to open and close
+  // only, instead of re-running while the operator types.
+  useEffect(() => {
+    close.current = onClose;
+  }, [onClose]);
+
+  // The dialog claims focus once, when it opens. Re-running this per keystroke
+  // moved the caret out of the field being edited and parked it on Tutup, so
+  // every character typed landed somewhere else.
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") close.current();
     };
     document.addEventListener("keydown", onKeyDown);
     document.body.classList.add("modal-open");
@@ -134,7 +145,7 @@ export function Modal({
       document.body.classList.remove("modal-open");
       previous?.focus();
     };
-  }, [onClose]);
+  }, []);
 
   return (
     <div
