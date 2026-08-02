@@ -11,6 +11,7 @@ import {
 import {
   anonymousReadEnabled,
   authRequiredMessage,
+  isSameOrigin,
   getOutboundAccess,
 } from "@/lib/request-auth";
 import { jakartaMonth, syncFromSuperset } from "@/lib/superset-sync";
@@ -31,8 +32,7 @@ async function freshSnapshot() {
 }
 
 export async function POST(request: NextRequest) {
-  const origin = request.headers.get("origin");
-  if (origin && origin !== request.nextUrl.origin) {
+  if (!isSameOrigin(request)) {
     return error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
   }
   const body = request.headers

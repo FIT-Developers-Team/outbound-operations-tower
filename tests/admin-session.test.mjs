@@ -145,6 +145,37 @@ test("an expired session cookie stops granting admin", async () => {
   assert.equal(saved.status, 401);
 });
 
+test("a TLS-terminating proxy does not make a same-origin request look foreign", async () => {
+  // Traefik forwards the request as plain HTTP, so the Worker sees an http URL
+  // while the browser sends an https origin.
+  const response = await call("/api/outbound/session", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://outbound.example.com",
+      "x-forwarded-proto": "https",
+    },
+    body: JSON.stringify({ email: ADMIN_EMAIL, token: ADMIN_TOKEN }),
+  });
+
+  assert.equal(response.status, 200);
+});
+
+test("a genuinely cross-site origin is still refused", async () => {
+  const response = await call("/api/outbound/session", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: "https://penyerang.example.com",
+      "x-forwarded-proto": "https",
+    },
+    body: JSON.stringify({ email: ADMIN_EMAIL, token: ADMIN_TOKEN }),
+  });
+
+  assert.equal(response.status, 403);
+  assert.match(await response.text(), /CROSS_ORIGIN_BLOCKED/);
+});
+
 test("sign-out clears the session cookie", async () => {
   const response = await call("/api/outbound/session", { method: "DELETE" });
 

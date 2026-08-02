@@ -6,7 +6,11 @@ import {
   adminTokenMatches,
   createAdminSession,
 } from "@/lib/admin-session";
-import { adminEmails, getOutboundAccess } from "@/lib/request-auth";
+import {
+  adminEmails,
+  getOutboundAccess,
+  isSameOrigin,
+} from "@/lib/request-auth";
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
@@ -24,10 +28,9 @@ function isSecureRequest(request: NextRequest) {
 }
 
 function rejectCrossOrigin(request: NextRequest) {
-  const origin = request.headers.get("origin");
-  return origin && origin !== request.nextUrl.origin
-    ? error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.")
-    : null;
+  return isSameOrigin(request)
+    ? null
+    : error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
 }
 
 export async function GET(request: NextRequest) {

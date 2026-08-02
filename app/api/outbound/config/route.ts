@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   anonymousReadEnabled,
   authRequiredMessage,
+  isSameOrigin,
   getOutboundAccess,
 } from "@/lib/request-auth";
 import {
@@ -68,8 +69,7 @@ export async function POST(request: NextRequest) {
   if (!request.headers.get("content-type")?.startsWith("application/json")) {
     return error(415, "JSON_REQUIRED", "Gunakan application/json.");
   }
-  const origin = request.headers.get("origin");
-  if (origin && origin !== request.nextUrl.origin) {
+  if (!isSameOrigin(request)) {
     return error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
   }
   const raw = await request.text();

@@ -19,6 +19,36 @@ function isLocalRequest(request: NextRequest) {
   );
 }
 
+function forwardedValue(request: NextRequest, header: string) {
+  return request.headers.get(header)?.split(",")[0]?.trim() || null;
+}
+
+/**
+ * Same-origin guard for write routes.
+ *
+ * A TLS-terminating proxy forwards the request as plain HTTP, so the URL the
+ * Worker sees carries scheme `http` while the browser sends an `https` origin.
+ * Comparing against the Worker's own URL therefore rejects genuine same-origin
+ * requests. The forwarded headers describe what the browser actually asked for.
+ *
+ * Only a browser sets `Origin`, and no page can forge it for another site, so
+ * trusting the forwarded scheme here does not weaken the CSRF protection.
+ */
+export function isSameOrigin(request: NextRequest) {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+
+  const host =
+    forwardedValue(request, "x-forwarded-host") ??
+    request.headers.get("host") ??
+    request.nextUrl.host;
+  const protocol =
+    forwardedValue(request, "x-forwarded-proto") ??
+    request.nextUrl.protocol.replace(":", "");
+
+  return origin === `${protocol}://${host}` || origin === request.nextUrl.origin;
+}
+
 export function adminEmails() {
   return (runtimeEnv("OUTBOUND_ADMIN_EMAILS") ?? "")
     .split(",")
