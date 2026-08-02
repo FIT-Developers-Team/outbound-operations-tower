@@ -11,6 +11,14 @@ import type {
   DestinationRule,
 } from "@/lib/outbound-types";
 import {
+  shadowedRuleIds,
+} from "@/lib/outbound-logic";
+import {
+  buildRoutePlanRules,
+  defaultRoutePlan,
+  diffDestinationRules,
+} from "@/lib/route-defaults";
+import {
   useOutbound,
 } from "@/components/outbound/outbound-provider";
 import {
@@ -219,12 +227,15 @@ export function ConnectorSettings({ data }: { data: DemoDataset }) {
 export function SettingsView({
   data,
   onRuleUpdate,
+  onRulesUpdate,
 }: {
   data: DemoDataset;
   onRuleUpdate: (rule: DestinationRule) => void;
+  onRulesUpdate: (rules: DestinationRule[]) => void;
 }) {
   const routing = dynamicRoutingOptions(data);
   const [draft, setDraft] = useState<DestinationRule | null>(null);
+  const [planMonth, setPlanMonth] = useState<string | null>(null);
   const [sort, setSort] = useState<
     SortState<"destination" | "month" | "wave" | "drop" | "sequence" | "status">
   >({ key: "sequence", direction: "asc" });
@@ -236,6 +247,32 @@ export function SettingsView({
     [data.orders],
   );
   const effectiveMonth = data.sourceProfile.sourceDate.slice(0, 7);
+  const destinationNames = useMemo(
+    () => new Map(destinations.map((item) => [item.code, item.name])),
+    [destinations],
+  );
+  // The plan is only expanded while its dialog is open, and only the rows that
+  // differ are sent, so re-running it on a month already configured this way
+  // writes nothing.
+  const planRules = useMemo(
+    () =>
+      planMonth
+        ? buildRoutePlanRules({
+            effectiveMonth: planMonth,
+            existing: data.destinationRules,
+            destinationNames,
+          })
+        : [],
+    [data.destinationRules, destinationNames, planMonth],
+  );
+  const planDiff = useMemo(
+    () => diffDestinationRules(planRules, data.destinationRules),
+    [data.destinationRules, planRules],
+  );
+  const shadowed = useMemo(
+    () => shadowedRuleIds(data.destinationRules),
+    [data.destinationRules],
+  );
   const configuredDestinations = new Set(
     data.destinationRules
       .filter((rule) => rule.active && rule.effectiveMonth === effectiveMonth)
@@ -281,7 +318,12 @@ export function SettingsView({
       <Section
         eyebrow="Berlaku per bulan"
         title="Routing tujuan"
-        action={<button className="btn btn-primary" onClick={() => createRule()} type="button">Tambah mapping</button>}
+        action={
+          <div className="section-actions">
+            <button className="btn" onClick={() => { setDraft(null); setPlanMonth(effectiveMonth); }} type="button">Rute default</button>
+            <button className="btn btn-primary" onClick={() => createRule()} type="button">Tambah mapping</button>
+          </div>
+        }
       >
         <div className="routing-discovery">
           <div>
@@ -313,6 +355,7 @@ export function SettingsView({
           <span><strong>{routing.waves.length}</strong> wave unik</span>
           <span><strong>{routing.drops.length}</strong> drop unik</span>
           <span><strong>{data.orders.filter((order) => order.mappingStatus === "UNMAPPED").length}</strong> split belum terpetakan</span>
+          {shadowed.size > 0 && <span><strong>{shadowed.size}</strong> mapping tertimpa</span>}
         </div>
         <div className="table-scroll">
           <table className="tbl">
@@ -333,7 +376,14 @@ export function SettingsView({
                   <td><span className="chip chip-accent">{rule.wave}</span></td>
                   <td><span className="chip">{rule.drop}</span></td>
                   <td className="numeric num">{rule.sequence}</td>
-                  <td><span className={`badge badge-${rule.active ? "normal" : "critical"}`}>{rule.active ? "AKTIF" : "NONAKTIF"}</span></td>
+                  <td>
+                    <span className={`badge badge-${!rule.active ? "critical" : shadowed.has(rule.id) ? "warning" : "normal"}`}>
+                      {!rule.active ? "NONAKTIF" : shadowed.has(rule.id) ? "TERTIMPA" : "AKTIF"}
+                    </span>
+                    {shadowed.has(rule.id) && (
+                      <small>Urutan lebih kecil sudah memakai {rule.destinationCode}.</small>
+                    )}
+                  </td>
                   <td><button className="btn btn-sm" onClick={() => setDraft({ ...rule })} type="button">Edit</button></td>
                 </tr>
               ))}
@@ -364,6 +414,59 @@ export function SettingsView({
             <label className="check-label"><input checked={draft.active} onChange={(event) => setDraft({ ...draft, active: event.target.checked })} type="checkbox" /> Mapping aktif</label>
           </div>
           <p className="section-note">Wave dan Drop adalah teks konfigurasi. Label atau jumlah baru tidak memerlukan perubahan kode.</p>
+        </Modal>
+      )}
+      {planMonth && (
+        <Modal
+          wide
+          eyebrow="Rute default"
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setPlanMonth(null)} type="button">Batal</button>
+              <button
+                className="btn btn-primary"
+                disabled={!planDiff.pending.length}
+                onClick={() => { onRulesUpdate(planDiff.pending); setPlanMonth(null); }}
+                type="button"
+              >
+                {planDiff.pending.length ? `Terapkan ${planDiff.pending.length} mapping` : "Sudah sesuai default"}
+              </button>
+            </>
+          }
+          onClose={() => setPlanMonth(null)}
+          title={`${defaultRoutePlan.length} rute default`}
+        >
+          <div className="form-grid">
+            <label><span>Bulan efektif</span><input className="input" onChange={(event) => setPlanMonth(event.target.value || effectiveMonth)} type="month" value={planMonth} /></label>
+            <div className="config-summary">
+              <span><strong>{planDiff.added.length}</strong> baru</span>
+              <span><strong>{planDiff.updated.length}</strong> diperbarui</span>
+              <span><strong>{planDiff.unchanged.length}</strong> sudah sesuai</span>
+            </div>
+          </div>
+          <div className="table-scroll">
+            <table className="tbl">
+              <thead><tr>
+                <th className="numeric">No</th>
+                <th>Wave</th>
+                <th>Route list</th>
+                <th>Drop 1</th>
+                <th>Drop 2</th>
+              </tr></thead>
+              <tbody>
+                {defaultRoutePlan.map((route) => (
+                  <tr key={route.routeNo}>
+                    <th className="numeric num" scope="row">{route.routeNo}</th>
+                    <td><span className="chip chip-accent">{route.wave}</span></td>
+                    <td>{route.routeList}</td>
+                    <td className="num">{route.drops[0] ?? "-"}</td>
+                    <td className="num">{route.drops[1] ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="section-note">Setiap drop menjadi satu mapping tujuan, sehingga {defaultRoutePlan.length} rute menghasilkan {planRules.length} mapping untuk {planMonth}. Mapping tujuan lain pada bulan ini tidak diubah, dan nama tujuan mengikuti data SO bila sudah tersedia.</p>
         </Modal>
       )}
     </>

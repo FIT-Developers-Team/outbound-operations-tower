@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveDestinationRule } from "@/lib/outbound-logic";
+import {
+  buildDestinationRuleIndex,
+  extractDestinationCode,
+} from "@/lib/outbound-logic";
 import {
   authRequiredMessage,
   isSameOrigin,
@@ -142,22 +145,35 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "updateDestinationRule") {
-      const rule = (Array.isArray(body.rows) ? body.rows[0] : null) as
-        | DestinationRule
-        | null;
-      if (!rule?.id || !rule.wave?.trim() || !rule.drop?.trim()) {
+      const rows = (Array.isArray(body.rows) ? body.rows : []) as
+        DestinationRule[];
+      if (!rows.length || rows.length > 200) {
+        throw new Error("Mapping routing harus berisi 1–200 baris.");
+      }
+      if (
+        rows.some(
+          (rule) =>
+            !rule?.id ||
+            !rule.destinationCode?.trim() ||
+            !rule.wave?.trim() ||
+            !rule.drop?.trim() ||
+            !/^\d{4}-\d{2}$/.test(rule.effectiveMonth ?? ""),
+        )
+      ) {
         throw new Error("Mapping destination tidak lengkap.");
       }
-      const existing = data.destinationRules.some((item) => item.id === rule.id);
-      data.destinationRules = existing
-        ? data.destinationRules.map((item) => (item.id === rule.id ? rule : item))
-        : [...data.destinationRules, rule];
+      // Map#set keeps the position of an id the snapshot already holds, so an
+      // edit stays where the operator saw it and only new rows are appended.
+      const byId = new Map(data.destinationRules.map((item) => [item.id, item]));
+      rows.forEach((rule) => byId.set(rule.id, rule));
+      data.destinationRules = [...byId.values()];
+      const ruleIndex = buildDestinationRuleIndex(
+        data.sourceProfile.sourceDate,
+        data.destinationRules,
+      );
       data.orders = data.orders.map((order) => {
-        const resolved = resolveDestinationRule(
-          order.destination,
-          data.sourceProfile.sourceDate,
-          data.destinationRules,
-        );
+        const resolved =
+          ruleIndex.get(extractDestinationCode(order.destination)) ?? null;
         return {
           ...order,
           wave: resolved?.wave ?? "UNMAPPED",
@@ -169,7 +185,9 @@ export async function POST(request: NextRequest) {
         data,
         user.email,
         "Mapping routing diperbarui",
-        `${rule.destinationCode}: ${rule.wave} / ${rule.drop}.`,
+        rows.length === 1
+          ? `${rows[0].destinationCode}: ${rows[0].wave} / ${rows[0].drop}.`
+          : `${rows.length} mapping tujuan diperbarui untuk ${rows[0].effectiveMonth}.`,
       );
     }
 

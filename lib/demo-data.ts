@@ -4,6 +4,10 @@ import {
   splitSupplyOrderLines,
   tenureDays,
 } from "./outbound-logic";
+import {
+  buildRoutePlanRules,
+  defaultRoutePlan,
+} from "./route-defaults";
 import type {
   AuditEvent,
   CheckerRoute,
@@ -29,35 +33,30 @@ const targetRules: TargetRule[] = [
   { mpStatus: "REGULER", targetQty: 1_900, maxLoadPct: 105, description: "Mulai hari ke-21." },
 ];
 
-const destinationSeed: Array<[string, string, Wave, DestinationRule["drop"], number]> = [
-  ["CAM", "CAM - Caman", "WAVE 1", "DROP 1", 10],
-  ["JTI", "JTI - Jatibening New", "WAVE 1", "DROP 1", 20],
-  ["MSB", "MSB - Medan Satria Bekasi", "WAVE 1", "DROP 2", 30],
-  ["BKJ", "BKJ - Bekasi Jaya", "WAVE 1+", "DROP 3", 40],
-  ["TSY", "TSY - Transyogi", "WAVE 1+", "DROP 4", 50],
-  ["PBT", "PBT - Pondok Betung", "WAVE 2", "DROP 1", 60],
-  ["PIN", "PIN - New Pondok Indah", "WAVE 2", "DROP 2", 70],
-  ["GPL", "GPL - Gudang Peluru", "WAVE 3", "DROP 1", 80],
-  ["CNR", "CNR - Cinere", "WAVE 4", "DROP 2", 90],
-  ["TDN", "TDN - Tendean", "WAVE 4", "DROP 3", 100],
-  ["DNS", "DNS - Danau Sunter", "WAVE 4+", "DROP 1", 110],
-  ["HBD", "HBD - Kelapa Hybrida", "WAVE 4+", "DROP 2", 120],
-  ["STL", "STL - Warehouse Sentul", "WAVE 4+", "DROP 5", 130],
-  ["SRP", "SRP - Serpong Utara", "WAVE 1+", "DROP 5", 140],
-];
+/**
+ * Full names for the destinations already known by name. Codes without one
+ * stay on their code until live SO data supplies the warehouse spelling.
+ */
+const destinationNames = new Map([
+  ["BKJ", "BKJ - Bekasi Jaya"],
+  ["CAM", "CAM - Caman"],
+  ["CNR", "CNR - Cinere"],
+  ["DNS", "DNS - Danau Sunter"],
+  ["GPL", "GPL - Gudang Peluru"],
+  ["HBD", "HBD - Kelapa Hybrida"],
+  ["JTI", "JTI - Jatibening New"],
+  ["MSB", "MSB - Medan Satria Bekasi"],
+  ["PBT", "PBT - Pondok Betung"],
+  ["PIN", "PIN - New Pondok Indah"],
+  ["SRP", "SRP - Serpong Utara"],
+  ["TDN", "TDN - Tendean"],
+  ["TSY", "TSY - Transyogi"],
+]);
 
-const destinationRules: DestinationRule[] = destinationSeed.map(
-  ([destinationCode, destinationName, wave, drop, sequence]) => ({
-    id: `WD-2026-07-${destinationCode}`,
-    effectiveMonth: "2026-07",
-    destinationCode,
-    destinationName,
-    wave,
-    drop,
-    sequence,
-    active: true,
-  }),
-);
+const destinationRules: DestinationRule[] = buildRoutePlanRules({
+  effectiveMonth: operationDate.slice(0, 7),
+  destinationNames,
+});
 
 const zoneAreaPairs: Array<[string, string[]]> = [
   ["MZA1", ["MZA - 1"]],
@@ -158,7 +157,9 @@ const pickers: Picker[] = pickerSeed.map((seed, index) => {
   };
 });
 
-const destinations = destinationRules.map((rule) => rule.destinationName);
+const destinations = [
+  ...new Set(destinationRules.map((rule) => rule.destinationName)),
+];
 const zones = zoneRules.map((rule) => rule.zone);
 const statusCycle: OrderStatus[] = [
   "NEW",
@@ -237,10 +238,10 @@ const orderSeed = splitSupplyOrderLines(orderLines, destinationRules).map((order
   };
 });
 
-const checkerSeed: CheckerRoute[] = Array.from({ length: 10 }, (_, index) => ({
-  id: `RT-${String(index + 1).padStart(2, "0")}`,
-  route: `Route ${String.fromCharCode(65 + index)}`,
-  wave: destinationRules[index % destinationRules.length].wave,
+const checkerSeed: CheckerRoute[] = defaultRoutePlan.slice(0, 10).map((route, index) => ({
+  id: `RT-${String(route.routeNo).padStart(2, "0")}`,
+  route: route.routeList,
+  wave: route.wave,
   quantity: 980 + ((index * 641) % 5_200),
   deadline: `${14 + Math.floor(index / 4)}:${String((index * 13) % 60).padStart(2, "0")}`,
   status:

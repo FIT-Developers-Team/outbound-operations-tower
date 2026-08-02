@@ -69,6 +69,7 @@ export function OutboundWorkspace({ view }: { view: WorkspaceView }) {
     stageManual,
     updatePicker,
     updateRule,
+    updateRules,
     updateSelectedOrders,
     updateTarget,
   } = useOutbound();
@@ -103,7 +104,7 @@ export function OutboundWorkspace({ view }: { view: WorkspaceView }) {
         )}
         {view === "reports" && <ReportsView data={data} />}
         {view === "settings" && (
-          <SettingsView data={data} onRuleUpdate={updateRule} />
+          <SettingsView data={data} onRuleUpdate={updateRule} onRulesUpdate={updateRules} />
         )}
         {view === "guide" && <GuideView />}
       </Suspense>

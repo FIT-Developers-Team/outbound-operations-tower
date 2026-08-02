@@ -2,16 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildBulkUploadRows,
+  buildDestinationRuleIndex,
   buildManualAssignments,
   bulkAuditCsv,
   checkManualAssignment,
   compareRouteLabels,
   deriveMpStatus,
+  extractDestinationCode,
   isEligiblePicker,
   minutesUntil,
   proposeAssignments,
+  resolveDestinationRule,
+  shadowedRuleIds,
   splitSupplyOrderLines,
 } from "../lib/outbound-logic.ts";
+
+function destinationRule(overrides = {}) {
+  return {
+    id: "RULE-1",
+    effectiveMonth: "2026-08",
+    destinationCode: "CNR",
+    destinationName: "CNR - Cinere",
+    wave: "WAVE 2",
+    drop: "DROP 1",
+    sequence: 17,
+    active: true,
+    ...overrides,
+  };
+}
 
 function order(overrides = {}) {
   return {
@@ -191,6 +209,44 @@ test("routing labels are dynamic and naturally sorted", () => {
     "EXPRESS",
     "UNMAPPED",
   ]);
+});
+
+test("the rule index resolves exactly like a per-order lookup", () => {
+  const rules = [
+    destinationRule({ id: "A", sequence: 24, wave: "WAVE 3" }),
+    destinationRule({ id: "B", sequence: 17, wave: "WAVE 2" }),
+    destinationRule({ id: "C", effectiveMonth: "2026-07", sequence: 1, wave: "WAVE 1" }),
+    destinationRule({ id: "D", effectiveMonth: "2026-09", sequence: 1, wave: "WAVE 9" }),
+    destinationRule({ id: "E", destinationCode: "GPL", sequence: 18, active: false }),
+    destinationRule({ id: "F", destinationCode: "DNS", sequence: 15, wave: "WAVE 2" }),
+  ];
+
+  for (const [destination, operationDate] of [
+    ["CNR - Cinere", "2026-08-02"],
+    ["CNR - Cinere", "2026-07-15"],
+    ["CNR - Cinere", "2026-09-30"],
+    ["DNS - Danau Sunter", "2026-08-02"],
+    ["GPL - Gudang Peluru", "2026-08-02"],
+    ["ZZZ - Tidak ada aturan", "2026-08-02"],
+  ]) {
+    const index = buildDestinationRuleIndex(operationDate, rules);
+    assert.deepEqual(
+      index.get(extractDestinationCode(destination)) ?? null,
+      resolveDestinationRule(destination, operationDate, rules),
+      `${destination} @ ${operationDate}`,
+    );
+  }
+});
+
+test("a mapping that can never win resolution is flagged, not silently ignored", () => {
+  const shadowed = shadowedRuleIds([
+    destinationRule({ id: "wave-2", sequence: 17 }),
+    destinationRule({ id: "wave-3", sequence: 24, wave: "WAVE 3", drop: "DROP 1" }),
+    destinationRule({ id: "other-month", effectiveMonth: "2026-09", sequence: 24 }),
+    destinationRule({ id: "inactive", sequence: 30, active: false }),
+    destinationRule({ id: "other-code", destinationCode: "GPL", sequence: 18 }),
+  ]);
+  assert.deepEqual([...shadowed], ["wave-3"]);
 });
 
 test("manual assignment locks all SO splits and requires a reason for override", () => {

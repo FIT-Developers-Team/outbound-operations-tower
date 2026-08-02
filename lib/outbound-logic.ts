@@ -138,6 +138,55 @@ export function resolveDestinationRule(
     )[0] ?? null;
 }
 
+/**
+ * Same resolution as resolveDestinationRule, resolved once per destination
+ * code instead of once per order. Re-mapping a full snapshot walks thousands
+ * of splits, and a route plan holds dozens of rules; without the index that is
+ * a filter and a sort per split.
+ */
+export function buildDestinationRuleIndex(
+  operationDate: string,
+  rules: DestinationRule[],
+) {
+  const effectiveMonth = operationDate.slice(0, 7);
+  const index = new Map<string, DestinationRule>();
+  rules.forEach((rule) => {
+    if (!rule.active || rule.effectiveMonth > effectiveMonth) return;
+    const code = rule.destinationCode.toUpperCase();
+    const current = index.get(code);
+    if (
+      !current ||
+      rule.effectiveMonth > current.effectiveMonth ||
+      (rule.effectiveMonth === current.effectiveMonth &&
+        rule.sequence < current.sequence)
+    ) {
+      index.set(code, rule);
+    }
+  });
+  return index;
+}
+
+/**
+ * Rules that are active and stored but can never win resolution, because a
+ * lower route number already claims that destination in the same month. Left
+ * unflagged, an operator sets a wave here and never sees it take effect.
+ */
+export function shadowedRuleIds(rules: DestinationRule[]) {
+  const winners = new Map<string, DestinationRule>();
+  rules.forEach((rule) => {
+    if (!rule.active) return;
+    const key = `${rule.effectiveMonth}|${rule.destinationCode.toUpperCase()}`;
+    const current = winners.get(key);
+    if (!current || rule.sequence < current.sequence) winners.set(key, rule);
+  });
+  const applied = new Set([...winners.values()].map((rule) => rule.id));
+  return new Set(
+    rules
+      .filter((rule) => rule.active && !applied.has(rule.id))
+      .map((rule) => rule.id),
+  );
+}
+
 export function splitSupplyOrderLines(
   lines: SupplyOrderLine[],
   rules: DestinationRule[],

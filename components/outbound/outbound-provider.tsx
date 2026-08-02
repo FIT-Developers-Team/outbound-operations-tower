@@ -12,10 +12,11 @@ import {
 } from "react";
 import { createDemoDataset } from "@/lib/demo-data";
 import {
+  buildDestinationRuleIndex,
   buildManualAssignments,
   buildBulkUploadRows,
+  extractDestinationCode,
   proposeAssignments,
-  resolveDestinationRule,
 } from "@/lib/outbound-logic";
 import type {
   AssignmentFilter,
@@ -60,6 +61,7 @@ type OutboundContextValue = {
   setProposals: (proposals: AssignmentProposal[]) => void;
   updatePicker: (picker: Picker) => void;
   updateRule: (rule: DestinationRule) => void;
+  updateRules: (rules: DestinationRule[]) => void;
   updateSelectedOrders: (next: Set<string>) => void;
   updateTarget: (rule: TargetRule) => void;
 };
@@ -460,30 +462,31 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     showNotice,
   ]);
 
-  const updateRule = useCallback(
-    (rule: DestinationRule) => {
+  const updateRules = useCallback(
+    (incoming: DestinationRule[]) => {
+      if (!incoming.length) return;
       if (dataMode === "live") {
-        void sendCommand("updateDestinationRule", { rows: [rule] });
+        void sendCommand("updateDestinationRule", { rows: incoming });
         return;
       }
       setData((current) => {
-        const exists = current.destinationRules.some(
-          (item) => item.id === rule.id,
+        // Map#set keeps the position of a key it already holds, so edits stay
+        // in place and only genuinely new mappings land at the end.
+        const byId = new Map(
+          current.destinationRules.map((item) => [item.id, item]),
         );
-        const rules = exists
-          ? current.destinationRules.map((item) =>
-              item.id === rule.id ? rule : item,
-            )
-          : [...current.destinationRules, rule];
+        incoming.forEach((rule) => byId.set(rule.id, rule));
+        const rules = [...byId.values()];
+        const index = buildDestinationRuleIndex(
+          current.sourceProfile.sourceDate,
+          rules,
+        );
         return {
           ...current,
           destinationRules: rules,
           orders: current.orders.map((order) => {
-            const resolved = resolveDestinationRule(
-              order.destination,
-              current.sourceProfile.sourceDate,
-              rules,
-            );
+            const resolved =
+              index.get(extractDestinationCode(order.destination)) ?? null;
             return {
               ...order,
               wave: resolved?.wave ?? "UNMAPPED",
@@ -497,10 +500,17 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       showNotice(
         "success",
         "Mapping sample diperbarui",
-        "Rekomendasi sebelumnya dihapus agar tidak memakai konfigurasi lama.",
+        incoming.length === 1
+          ? "Rekomendasi sebelumnya dihapus agar tidak memakai konfigurasi lama."
+          : `${incoming.length} mapping diterapkan. Rekomendasi sebelumnya dihapus agar tidak memakai konfigurasi lama.`,
       );
     },
     [dataMode, sendCommand, showNotice],
+  );
+
+  const updateRule = useCallback(
+    (rule: DestinationRule) => updateRules([rule]),
+    [updateRules],
   );
 
   const updatePicker = useCallback(
@@ -605,6 +615,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       setProposals,
       updatePicker,
       updateRule,
+      updateRules,
       updateSelectedOrders,
       updateTarget,
     }),
@@ -623,6 +634,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       setCheckerStatus,
       updatePicker,
       updateRule,
+      updateRules,
       updateSelectedOrders,
       updateTarget,
     ],
