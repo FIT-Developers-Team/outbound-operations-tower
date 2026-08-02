@@ -106,6 +106,64 @@ console.log(
   `Binding variable: ${Object.keys(bindings).sort().join(", ") || "(kosong)"}`,
 );
 
+// Headers that describe one hop and must not be copied to the next one.
+const HOP_BY_HOP = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "host",
+]);
+
+async function proxyOutbound(request, response) {
+  const target = request.url?.startsWith("http")
+    ? request.url
+    : `https://${request.headers.host ?? ""}${request.url ?? "/"}`;
+
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (HOP_BY_HOP.has(name) || value === undefined) continue;
+    headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+  }
+
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+
+  try {
+    const upstream = await fetch(target, {
+      method: request.method,
+      headers,
+      body: chunks.length ? Buffer.concat(chunks) : undefined,
+      // The Worker inspects 3xx itself to detect an expired Superset session.
+      redirect: "manual",
+    });
+    const body = Buffer.from(await upstream.arrayBuffer());
+    const outgoing = {};
+    upstream.headers.forEach((value, name) => {
+      // fetch already decompressed the body, so the upstream encoding and
+      // length no longer describe what is being forwarded.
+      if (name === "content-encoding" || name === "content-length") return;
+      if (HOP_BY_HOP.has(name)) return;
+      outgoing[name] = value;
+    });
+    response.writeHead(upstream.status, outgoing);
+    response.end(body);
+  } catch (caught) {
+    const reason = caught instanceof Error ? caught.message : String(caught);
+    const cause =
+      caught instanceof Error && caught.cause instanceof Error
+        ? ` (${caught.cause.message})`
+        : "";
+    console.error(`Permintaan keluar gagal ke ${target}: ${reason}${cause}`);
+    response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+    response.end(`Permintaan keluar gagal: ${reason}${cause}`);
+  }
+}
+
 // Wrangler nests local state under `v3/`. Keeping that layout means an existing
 // volume carries over unchanged.
 const persistRoot = path.join(stateDirectory, "v3");
@@ -151,6 +209,12 @@ const miniflare = new Miniflare({
     // disk instead of handing the request to the Worker that renders pages.
     routerConfig: { has_user_worker: true },
   },
+  // Every request the Worker makes to the outside world is performed by Node
+  // rather than by workerd's own client. workerd resolves names and validates
+  // certificates independently of the container it runs in, and reports any
+  // failure as `internal error; reference = ...`, which names no cause. Node
+  // uses the container's resolver and trust store, and says what went wrong.
+  outboundService: { node: proxyOutbound },
   d1Persist: path.join(persistRoot, "d1"),
   r2Persist: path.join(persistRoot, "r2"),
   kvPersist: path.join(persistRoot, "kv"),
