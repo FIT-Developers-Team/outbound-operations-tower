@@ -44,7 +44,7 @@ const guideSteps = [
     title: "Periksa kualitas",
     summary: "Buka Laporan untuk memeriksa struktur, nilai kosong, routing, dan kesiapan.",
     detail: "SO diagregasi pada grain SO × picking zone. Picked qty hanya dianggap selesai jika picking_end_at terisi.",
-    check: "Jumlah SO unik dan split dapat direkonsiliasi.",
+    check: "Jumlah SO unik dan SO-zona dapat direkonsiliasi.",
   },
   {
     title: "Atur routing",

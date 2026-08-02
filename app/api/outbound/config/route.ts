@@ -7,6 +7,7 @@ import {
 } from "@/lib/request-auth";
 import {
   encryptCookie,
+  getDestinationRoutes,
   getConnectorPublicConfig,
   getStoredConnector,
   hasPersistentBindings,
@@ -51,6 +52,9 @@ export async function GET(request: NextRequest) {
     ok: true,
     config: await getConnectorPublicConfig(),
     persistenceReady: await hasPersistentBindings(),
+    // Carried here so the workspace can apply stored routing even while it is
+    // still showing sample data, and without paying for a second request.
+    destinationRules: await getDestinationRoutes(),
   });
 }
 

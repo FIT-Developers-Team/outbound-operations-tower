@@ -45,7 +45,7 @@ export function ReportsView({ data }: { data: DemoDataset }) {
               <li key={note}><strong>{String(index + 1).padStart(2, "0")}</strong><span>{note}</span></li>
             ))}
             <li><strong>Grain</strong><span>{number.format(data.sourceProfile.soRows)} line menjadi {number.format(data.sourceProfile.soZoneSplits)} SO × zona.</span></li>
-            <li><strong>Routing</strong><span>{data.orders.filter((order) => order.mappingStatus === "UNMAPPED").length} split belum memiliki Wave/Drop.</span></li>
+            <li><strong>Routing</strong><span>{data.orders.filter((order) => order.mappingStatus === "UNMAPPED").length} SO-zona belum memiliki Wave/Drop.</span></li>
           </ol>
         </Section>
         <Section eyebrow="Distribusi kerja" title="Ukuran batch">
@@ -58,7 +58,7 @@ export function ReportsView({ data }: { data: DemoDataset }) {
           <ol className="quality-list">
             <li><strong>Status</strong><span>Hanya NEW dan picker kosong yang masuk pool.</span></li>
             <li><strong>Picker</strong><span>Aktif, check-in, jadwal, zona, dan kapasitas.</span></li>
-            <li><strong>SO</strong><span>Semua split dalam satu SO memakai satu staff_id.</span></li>
+            <li><strong>SO</strong><span>Semua SO-zona dalam satu SO memakai satu staff_id.</span></li>
             <li><strong>Pengecualian</strong><span>Assign manual di luar aturan wajib memiliki alasan.</span></li>
           </ol>
         </Section>

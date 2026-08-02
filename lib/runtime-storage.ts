@@ -1,6 +1,7 @@
 import type {
   ConnectorPublicConfig,
   DemoDataset,
+  DestinationRule,
   SyncHealth,
 } from "./outbound-types";
 import { runtimeEnv } from "./runtime-env";
@@ -101,6 +102,81 @@ export type StoredConnector = {
   updatedAt: string;
 };
 
+type DestinationRouteRow = {
+  id: string;
+  effective_month: string;
+  destination_code: string;
+  destination_name: string;
+  wave: string;
+  drop_label: string;
+  sequence: number;
+  active: number;
+};
+
+/**
+ * Routing mappings, kept outside the snapshot so they outlive it. They are
+ * read on every dataset request, including while the workspace is still on
+ * sample data because no sync has succeeded yet.
+ */
+export async function getDestinationRoutes(): Promise<DestinationRule[]> {
+  const env = await runtimeBindings();
+  if (!env.DB) return [];
+  await ensureRuntimeSchema();
+  const rows = await env.DB.prepare(
+    `SELECT id, effective_month, destination_code, destination_name, wave,
+            drop_label, sequence, active
+       FROM destination_routes
+      ORDER BY sequence, destination_code`,
+  ).all<DestinationRouteRow>();
+  return (rows.results ?? []).map((row) => ({
+    id: row.id,
+    effectiveMonth: row.effective_month,
+    destinationCode: row.destination_code,
+    destinationName: row.destination_name,
+    wave: row.wave,
+    drop: row.drop_label,
+    sequence: row.sequence,
+    active: row.active !== 0,
+  }));
+}
+
+export async function saveDestinationRoutes(rules: DestinationRule[]) {
+  const env = await runtimeBindings();
+  if (!env.DB || !rules.length) return false;
+  await ensureRuntimeSchema();
+  const now = new Date().toISOString();
+  await env.DB.batch(
+    rules.map((rule) =>
+      env.DB!.prepare(
+        `INSERT INTO destination_routes
+           (id, effective_month, destination_code, destination_name, wave,
+            drop_label, sequence, active, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(id) DO UPDATE SET
+           effective_month = excluded.effective_month,
+           destination_code = excluded.destination_code,
+           destination_name = excluded.destination_name,
+           wave = excluded.wave,
+           drop_label = excluded.drop_label,
+           sequence = excluded.sequence,
+           active = excluded.active,
+           updated_at = excluded.updated_at`,
+      ).bind(
+        rule.id,
+        rule.effectiveMonth,
+        rule.destinationCode.toUpperCase(),
+        rule.destinationName,
+        rule.wave,
+        rule.drop,
+        rule.sequence,
+        rule.active ? 1 : 0,
+        now,
+      ),
+    ),
+  );
+  return true;
+}
+
 export async function hasPersistentBindings() {
   const env = await runtimeBindings();
   return Boolean(env.DB && env.SNAPSHOTS);
@@ -163,6 +239,22 @@ async function initializeRuntimeSchema() {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS sync_runs_status_idx ON sync_runs (status)",
+    ),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS destination_routes (
+        id TEXT PRIMARY KEY NOT NULL,
+        effective_month TEXT NOT NULL,
+        destination_code TEXT NOT NULL,
+        destination_name TEXT NOT NULL,
+        wave TEXT NOT NULL,
+        drop_label TEXT NOT NULL,
+        sequence INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL
+      )
+    `),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS destination_routes_code_idx ON destination_routes (destination_code)",
     ),
     db.prepare(`
       CREATE TABLE IF NOT EXISTS runtime_secrets (

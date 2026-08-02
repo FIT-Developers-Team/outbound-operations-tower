@@ -462,7 +462,7 @@ export function MetricStrip({
       <KpiCard
         label="Request"
         value={number.format(metrics.requestQty)}
-        sub={`${metrics.totalSo} SO · ${metrics.zoneSplits} split`}
+        sub={`${metrics.totalSo} SO · ${metrics.zoneSplits} SO-zona`}
         tone="accent"
       />
       <KpiCard
@@ -474,7 +474,7 @@ export function MetricStrip({
       <KpiCard
         label="Sisa"
         value={number.format(metrics.remainingQty)}
-        sub={`${metrics.atRisk} split berisiko`}
+        sub={`${metrics.atRisk} SO-zona berisiko`}
         tone={metrics.atRisk ? "warning" : "normal"}
       />
       <KpiCard

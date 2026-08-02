@@ -176,7 +176,7 @@ export function OrdersView({ data }: { data: DemoDataset }) {
         <label><span>Sampai tanggal</span><input className="input" onChange={(event) => setToDate(event.target.value)} type="date" value={toDate} /></label>
         <button className="btn btn-ghost" onClick={() => { setQuery(""); setWaves([]); setDrops([]); setStatuses([]); setZonesSelected([]); setPriorities([]); setShifts([]); setRemarks([]); setAssignmentStates([]); setFromDate(""); setToDate(""); }} type="button">Reset filter</button>
       </div>
-      <Section eyebrow={`${new Set(filtered.map((order) => order.soNumber)).size} SO · ${filtered.length} split`} title="Index SO × zona">
+      <Section eyebrow={`${new Set(filtered.map((order) => order.soNumber)).size} SO · ${filtered.length} SO-zona`} title="Index SO × zona">
         <div className="table-scroll">
           <table className="tbl">
             <thead><tr>

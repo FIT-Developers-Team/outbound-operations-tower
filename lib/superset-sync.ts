@@ -14,6 +14,7 @@ import {
   saveDatasetSnapshot,
   saveRawExport,
   saveStoredConnector,
+  getDestinationRoutes,
 } from "./runtime-storage";
 import type {
   DemoDataset,
@@ -682,6 +683,7 @@ function buildDataset(
     rejected: string[];
   },
   warehouse?: DemoDataset["warehouse"],
+  storedRoutes?: DestinationRule[],
 ): DemoDataset {
   const fallback = createDemoDataset();
   const sourceDate = maxDate(
@@ -691,7 +693,12 @@ function buildDataset(
     ],
     `${month}-01`,
   );
-  const destinationRules = previous?.destinationRules ?? [];
+  // Stored routing wins over whatever the previous snapshot happened to carry,
+  // so a sync applies the mapping the operator configured rather than replacing
+  // it with the state of the last export.
+  const destinationRules = storedRoutes?.length
+    ? storedRoutes
+    : (previous?.destinationRules ?? []);
   const targetRules = previous?.targetRules ?? DEFAULT_TARGETS;
   const orders = buildOrders(soRecords, month, destinationRules);
   const pickers = buildPickers(
@@ -900,6 +907,7 @@ export async function syncFromSuperset(
       name: connector.warehouseName,
       timezone: connector.warehouseTimezone,
     },
+    await getDestinationRoutes(),
   );
   if (
     dataset.orders.length === 0 ||

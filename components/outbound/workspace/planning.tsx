@@ -180,7 +180,7 @@ export function ManualAssignmentModal({
         </>
       }
       onClose={onClose}
-      title={`${scopedOrders.length} split dipilih`}
+      title={`${scopedOrders.length} SO-zona dipilih`}
     >
       <div className="manual-layout">
         <div className="form-stack">
@@ -311,7 +311,7 @@ export function ManualAssignmentModal({
               }
               type="checkbox"
             />
-            Kunci seluruh split pada SO yang sama
+            Kunci seluruh zona pada SO yang sama
           </label>
           <div className="guardrail-grid">
             {[
@@ -375,7 +375,7 @@ export function ManualAssignmentModal({
               return (
                 <div key={item.pickerId}>
                   <span><strong>{picker?.name}</strong><small>{picker?.scheduleDescription}</small></span>
-                  <b className="num">{item.orderIds.length} split · {number.format(checks[index]?.totalQty ?? 0)}</b>
+                  <b className="num">{item.orderIds.length} SO-zona · {number.format(checks[index]?.totalQty ?? 0)}</b>
                 </div>
               );
             })}

@@ -103,7 +103,7 @@ export function OverviewView({ data }: { data: DemoDataset }) {
             />
             <Definition label="Picker siap" value={detailZone.activeMp} />
             <Definition
-              label="SO / split"
+              label="SO / zona"
               value={`${detailZone.totalSo} / ${detailZone.zoneSplits}`}
             />
             <Definition

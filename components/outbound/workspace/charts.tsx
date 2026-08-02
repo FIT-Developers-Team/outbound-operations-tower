@@ -299,7 +299,7 @@ export function QuantityHistogram({ data }: { data: DemoDataset }) {
     <div className="histogram" role="img" aria-label="Distribusi quantity per SO-zone">
       {bins.map((bin) => (
         <div key={bin.from}>
-          <span title={`${bin.count} split`}>
+          <span title={`${bin.count} SO-zona`}>
             <i style={{ height: `${Math.max(2, (bin.count / maxCount) * 100)}%` }} />
           </span>
           <strong className="num">

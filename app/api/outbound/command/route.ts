@@ -9,8 +9,10 @@ import {
   getOutboundAccess,
 } from "@/lib/request-auth";
 import {
+  getDestinationRoutes,
   loadDatasetSnapshot,
   saveDatasetSnapshot,
+  saveDestinationRoutes,
 } from "@/lib/runtime-storage";
 import type {
   CheckerState,
@@ -97,8 +99,50 @@ export async function POST(request: NextRequest) {
   if (!actions.has(action)) {
     return error(400, "INVALID_ACTION", "Command tidak dikenal.");
   }
+  // Routing is configuration and must not depend on a snapshot existing. It is
+  // validated and stored first, so a mapping survives even while the workspace
+  // is still showing sample data because no sync has succeeded yet.
+  const routingRows =
+    action === "updateDestinationRule"
+      ? ((Array.isArray(body.rows) ? body.rows : []) as DestinationRule[])
+      : [];
+  if (action === "updateDestinationRule") {
+    if (!routingRows.length || routingRows.length > 200) {
+      return error(
+        400,
+        "INVALID_ROWS",
+        "Mapping routing harus berisi 1–200 baris.",
+      );
+    }
+    if (
+      routingRows.some(
+        (rule) =>
+          !rule?.id ||
+          !rule.destinationCode?.trim() ||
+          !rule.wave?.trim() ||
+          !rule.drop?.trim() ||
+          !/^\d{4}-\d{2}$/.test(rule.effectiveMonth ?? ""),
+      )
+    ) {
+      return error(
+        400,
+        "INVALID_ROWS",
+        "Mapping destination tidak lengkap.",
+      );
+    }
+    await saveDestinationRoutes(routingRows);
+  }
+
   const snapshot = await loadDatasetSnapshot();
   if (!snapshot) {
+    // Routing was already stored above. Reporting success here is what lets an
+    // operator configure waves before the first successful sync.
+    if (action === "updateDestinationRule") {
+      return NextResponse.json({
+        ok: true,
+        destinationRules: await getDestinationRoutes(),
+      });
+    }
     return error(
       409,
       "SNAPSHOT_NOT_READY",
@@ -113,7 +157,7 @@ export async function POST(request: NextRequest) {
         ? (body.rows as Array<Record<string, unknown>>)
         : [];
       if (!rows.length || rows.length > 500) {
-        throw new Error("Batch assignment harus berisi 1–500 split.");
+        throw new Error("Batch assignment harus berisi 1–500 SO-zona.");
       }
       const byOrder = new Map(
         rows.map((row) => [
@@ -140,7 +184,7 @@ export async function POST(request: NextRequest) {
         data,
         user.email,
         "Assignment batch disimpan",
-        `${rows.length} SO-zone split diperbarui.`,
+        `${rows.length} SO-zona diperbarui.`,
       );
     }
 

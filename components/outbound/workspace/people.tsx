@@ -10,12 +10,14 @@ import {
   isEligiblePicker,
   number,
   pickerLoadPct,
+  remainingQty,
 } from "@/lib/outbound-logic";
 import type {
   DemoDataset,
   MpStatus,
   Picker,
   ShiftCode,
+  SupplyOrder,
   TargetRule,
 } from "@/lib/outbound-types";
 import {
@@ -201,6 +203,125 @@ export function ProductivityTrend({
         Nilai per jam membagi output dengan picker-hari aktif pada jam yang sama;
         nilai harian membagi output dengan picker aktif pada tanggal tersebut.
       </p>
+    </Section>
+  );
+}
+
+/**
+ * What each picker still has to finish. "Sisa" is read from the numbers rather
+ * than from so_status, because that column is free text from Superset and a new
+ * label there must not silently empty this list.
+ */
+function OutstandingByPicker({ data }: { data: DemoDataset }) {
+  const [detailPicker, setDetailPicker] = useState<string | null>(null);
+
+  const rows = useMemo(() => {
+    const byPicker = new Map<string, SupplyOrder[]>();
+    data.orders.forEach((order) => {
+      if (!order.pickerId || remainingQty(order) <= 0) return;
+      byPicker.set(order.pickerId, [
+        ...(byPicker.get(order.pickerId) ?? []),
+        order,
+      ]);
+    });
+    const pickers = new Map(data.pickers.map((picker) => [picker.id, picker]));
+    return [...byPicker.entries()]
+      .map(([pickerId, orders]) => {
+        const picker = pickers.get(pickerId);
+        const requestQty = orders.reduce((sum, o) => sum + o.requestQty, 0);
+        const remaining = orders.reduce((sum, o) => sum + remainingQty(o), 0);
+        return {
+          pickerId,
+          name: picker?.name ?? pickerId,
+          shift: picker?.shift ?? "-",
+          soCount: new Set(orders.map((order) => order.soNumber)).size,
+          zoneRows: orders.length,
+          remaining,
+          donePct: requestQty > 0 ? ((requestQty - remaining) / requestQty) * 100 : 0,
+          orders: [...orders].sort((a, b) => a.deadline.localeCompare(b.deadline)),
+        };
+      })
+      .sort((a, b) => b.remaining - a.remaining);
+  }, [data.orders, data.pickers]);
+
+  const detail = rows.find((row) => row.pickerId === detailPicker) ?? null;
+  const totalRemaining = rows.reduce((sum, row) => sum + row.remaining, 0);
+
+  return (
+    <Section
+      eyebrow={`${rows.length} picker · sisa ${number.format(totalRemaining)} qty`}
+      title="Sisa SO per picker"
+    >
+      {rows.length === 0 ? (
+        <p className="empty-note">Tidak ada SO berjalan yang menyisakan qty.</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Picker</th>
+                <th>Shift</th>
+                <th className="num">SO</th>
+                <th className="num">SO-zona</th>
+                <th className="num">Sisa qty</th>
+                <th>Progres</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.pickerId}>
+                  <td><strong>{row.name}</strong><small>{row.pickerId}</small></td>
+                  <td>{row.shift}</td>
+                  <td className="num">{row.soCount}</td>
+                  <td className="num">{row.zoneRows}</td>
+                  <td className="num">{number.format(row.remaining)}</td>
+                  <td><ProgressBar label={`${row.donePct.toFixed(0)}% selesai`} value={row.donePct} /></td>
+                  <td>
+                    <button className="btn btn-sm" onClick={() => setDetailPicker(row.pickerId)} type="button">Detail SO</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {detail && (
+        <Modal
+          eyebrow={`${detail.soCount} SO · ${detail.zoneRows} SO-zona`}
+          onClose={() => setDetailPicker(null)}
+          title={`${detail.name} · sisa ${number.format(detail.remaining)} qty`}
+          wide
+        >
+          <div className="table-scroll">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>SO</th>
+                  <th>Zona</th>
+                  <th>Tujuan</th>
+                  <th>Wave / Drop</th>
+                  <th className="num">Sisa</th>
+                  <th>Deadline</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.orders.map((order) => (
+                  <tr key={order.id}>
+                    <td><strong>{order.soNumber}</strong><small>{order.status}</small></td>
+                    <td>{order.zone}</td>
+                    <td>{order.destination}</td>
+                    <td>{order.wave} / {order.drop}</td>
+                    <td className="num">{number.format(remainingQty(order))}</td>
+                    <td>{order.deadline}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
+      )}
     </Section>
   );
 }
@@ -425,6 +546,7 @@ export function PeopleView({
         </Section>
       </div>
 
+      <OutstandingByPicker data={data} />
       <Section eyebrow="Batas beban per status" title="Target picker">
         <div className="target-grid">
           {data.targetRules.map((rule) => (

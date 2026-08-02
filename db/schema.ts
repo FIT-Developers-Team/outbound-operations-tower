@@ -64,6 +64,23 @@ export const datasetSnapshots = sqliteTable("dataset_snapshots", {
   runId: text("run_id").notNull(),
 });
 
+/**
+ * Routing is configuration, not snapshot data. Keeping it in its own table
+ * means a mapping survives a reload, a redeploy, and the period before any
+ * Superset sync has ever succeeded.
+ */
+export const destinationRoutes = sqliteTable("destination_routes", {
+  id: text("id").primaryKey(),
+  effectiveMonth: text("effective_month").notNull(),
+  destinationCode: text("destination_code").notNull(),
+  destinationName: text("destination_name").notNull(),
+  wave: text("wave").notNull(),
+  drop: text("drop_label").notNull(),
+  sequence: integer("sequence").notNull().default(0),
+  active: integer("active").notNull().default(1),
+  updatedAt: text("updated_at").notNull(),
+});
+
 // Secrets the deployment generates for itself when the environment supplies
 // none. Rows are written once and then read for the lifetime of the database,
 // so material encrypted under a generated key stays readable across redeploys.

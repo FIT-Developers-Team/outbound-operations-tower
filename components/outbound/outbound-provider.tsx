@@ -248,6 +248,8 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     [showNotice],
   );
 
+  const storedRulesLoaded = useRef(false);
+
   useEffect(() => {
     if (initialRefresh.current) return;
     initialRefresh.current = true;
@@ -327,7 +329,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
           ? "warning"
           : "info",
         "Rekomendasi selesai",
-        `${planned.length} split diperiksa. Tinjau kendala sebelum diterapkan.`,
+        `${planned.length} SO-zona diperiksa. Tinjau kendala sebelum diterapkan.`,
       );
     },
     [data.orders, data.pickers, data.targetRules, selectedOrders, showNotice],
@@ -360,7 +362,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       showNotice(
         inputs.some((input) => input.allowOverride) ? "warning" : "success",
         "Assign manual masuk staging",
-        `${manual.length} split untuk ${inputs.length} picker siap ditinjau.`,
+        `${manual.length} SO-zona untuk ${inputs.length} picker siap ditinjau.`,
       );
     },
     [data.orders, data.pickers, data.targetRules, showNotice],
@@ -443,7 +445,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     addAudit({
       actor: "Demo operator",
       action: "Batch assignment diterapkan pada data contoh",
-      detail: `${readySo.size} SO / ${valid.length} zone split assigned setelah seluruh bulk guardrail lulus.`,
+      detail: `${readySo.size} SO / ${valid.length} SO-zona ditugaskan setelah seluruh guardrail bulk lulus.`,
       tone: "success",
     });
     setSelectedOrders(new Set());
@@ -462,13 +464,10 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     showNotice,
   ]);
 
-  const updateRules = useCallback(
-    (incoming: DestinationRule[]) => {
-      if (!incoming.length) return;
-      if (dataMode === "live") {
-        void sendCommand("updateDestinationRule", { rows: incoming });
-        return;
-      }
+  // Routing is stored on the server in its own table, so it is applied to
+  // whatever dataset is on screen — live snapshot or sample — and survives a
+  // reload either way.
+  const applyRulesLocally = useCallback((incoming: DestinationRule[]) => {
       setData((current) => {
         // Map#set keeps the position of a key it already holds, so edits stay
         // in place and only genuinely new mappings land at the end.
@@ -496,22 +495,75 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
           }),
         };
       });
+  }, []);
+
+  const updateRules = useCallback(
+    async (incoming: DestinationRule[]) => {
+      if (!incoming.length) return;
+      // Shown immediately, then stored. The generic command helper reloads the
+      // dataset on success, which would discard the change while the workspace
+      // is still on sample data because no snapshot exists to reload from.
+      applyRulesLocally(incoming);
       setProposals([]);
-      showNotice(
-        "success",
-        "Mapping sample diperbarui",
-        incoming.length === 1
-          ? "Rekomendasi sebelumnya dihapus agar tidak memakai konfigurasi lama."
-          : `${incoming.length} mapping diterapkan. Rekomendasi sebelumnya dihapus agar tidak memakai konfigurasi lama.`,
-      );
+      try {
+        const response = await fetch("/api/outbound/command", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": stableCommandKey("updateDestinationRule"),
+          },
+          body: JSON.stringify({
+            action: "updateDestinationRule",
+            rows: incoming,
+          }),
+        });
+        const payload = (await response.json()) as {
+          message?: string;
+          ok?: boolean;
+        };
+        if (!response.ok || payload.ok !== true) {
+          throw new Error(payload.message || "Mapping belum tersimpan.");
+        }
+        showNotice(
+          "success",
+          "Mapping routing tersimpan",
+          incoming.length === 1
+            ? "Mapping disimpan di server dan tetap berlaku setelah halaman dimuat ulang."
+            : `${incoming.length} mapping disimpan di server dan tetap berlaku setelah halaman dimuat ulang.`,
+        );
+      } catch (caught) {
+        showNotice(
+          "error",
+          "Mapping belum tersimpan",
+          caught instanceof Error
+            ? caught.message
+            : "Mapping routing gagal disimpan.",
+        );
+      }
     },
-    [dataMode, sendCommand, showNotice],
+    [applyRulesLocally, showNotice],
   );
 
   const updateRule = useCallback(
-    (rule: DestinationRule) => updateRules([rule]),
+    (rule: DestinationRule) => void updateRules([rule]),
     [updateRules],
   );
+
+  // Stored routing rides along with the connector config that is fetched
+  // anyway, so a reload restores the mapping without a second request and
+  // without waiting for a snapshot to exist.
+  useEffect(() => {
+    if (storedRulesLoaded.current) return;
+    storedRulesLoaded.current = true;
+    void fetch("/api/outbound/config", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload: { destinationRules?: DestinationRule[] }) => {
+        if (payload.destinationRules?.length) {
+          applyRulesLocally(payload.destinationRules);
+        }
+      })
+      .catch(() => undefined);
+  }, [applyRulesLocally]);
 
   const updatePicker = useCallback(
     (picker: Picker) => {

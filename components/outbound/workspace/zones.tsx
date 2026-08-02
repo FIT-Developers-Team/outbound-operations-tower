@@ -90,7 +90,7 @@ export function ZonesView({ data }: { data: DemoDataset }) {
                 <SortableHeader column="status" label="Status" onSort={setSort} sort={sort} />
                 <SortableHeader column="wave" label="Wave" onSort={setSort} sort={sort} />
                 <SortableHeader column="mp" label="MP" numeric onSort={setSort} sort={sort} />
-                <SortableHeader column="so" label="SO / split" numeric onSort={setSort} sort={sort} />
+                <SortableHeader column="so" label="SO / zona" numeric onSort={setSort} sort={sort} />
                 <SortableHeader column="request" label="Request" numeric onSort={setSort} sort={sort} />
                 <SortableHeader column="remaining" label="Sisa" numeric onSort={setSort} sort={sort} />
                 <SortableHeader column="progress" label="Progres" onSort={setSort} sort={sort} />
@@ -134,7 +134,7 @@ export function ZonesView({ data }: { data: DemoDataset }) {
             <Definition label="Status" value={<AlertBadge state={detail.state} />} />
             <Definition label="Wave" value={detail.waves.join(", ")} />
             <Definition label="Picker siap" value={detail.activeMp} />
-            <Definition label="SO / split" value={`${detail.totalSo} / ${detail.zoneSplits}`} />
+            <Definition label="SO / zona" value={`${detail.totalSo} / ${detail.zoneSplits}`} />
             <Definition label="Produktivitas" value={`${Math.round(detail.productivity)} unit/jam`} />
           </div>
         </Modal>

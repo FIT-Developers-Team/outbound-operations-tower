@@ -354,7 +354,7 @@ export function SettingsView({
           <span><strong>{data.destinationRules.length}</strong> mapping</span>
           <span><strong>{routing.waves.length}</strong> wave unik</span>
           <span><strong>{routing.drops.length}</strong> drop unik</span>
-          <span><strong>{data.orders.filter((order) => order.mappingStatus === "UNMAPPED").length}</strong> split belum terpetakan</span>
+          <span><strong>{data.orders.filter((order) => order.mappingStatus === "UNMAPPED").length}</strong> SO-zona belum terpetakan</span>
           {shadowed.size > 0 && <span><strong>{shadowed.size}</strong> mapping tertimpa</span>}
         </div>
         <div className="table-scroll">
