@@ -287,6 +287,7 @@ export type ConnectorPublicConfig = {
   lastVerifiedAt: string | null;
   lastRunAt: string | null;
   lastRunStatus: string | null;
+  lastRunMessage: string | null;
 };
 
 export type DemoDataset = {

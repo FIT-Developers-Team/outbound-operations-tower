@@ -65,6 +65,7 @@ type ConnectorRow = {
 type RunRow = {
   started_at: string | null;
   status: string | null;
+  message: string | null;
 };
 
 type SnapshotRow = {
@@ -547,7 +548,7 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
   let lastRun: RunRow | null = null;
   if (env.DB) {
     lastRun = await env.DB.prepare(
-      "SELECT started_at, status FROM sync_runs ORDER BY started_at DESC LIMIT 1",
+      "SELECT started_at, status, message FROM sync_runs ORDER BY started_at DESC LIMIT 1",
     ).first<RunRow>();
   }
   const environmentCookie = Boolean(
@@ -584,6 +585,9 @@ export async function getConnectorPublicConfig(): Promise<ConnectorPublicConfig>
     lastVerifiedAt: connector.lastVerifiedAt,
     lastRunAt: lastRun?.started_at ?? null,
     lastRunStatus: lastRun?.status ?? null,
+    // Kept separate from the connector's lastMessage, which a later save
+    // overwrites and which would otherwise erase why a sync failed.
+    lastRunMessage: lastRun?.message ?? null,
   };
 }
 

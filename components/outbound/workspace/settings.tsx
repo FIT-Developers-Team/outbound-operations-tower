@@ -165,6 +165,7 @@ export function ConnectorSettings({ data }: { data: DemoDataset }) {
             <div><dt>Enkripsi</dt><dd>{config?.encryptionReady ? `AES-GCM siap · kunci ${config.encryptionKeySource === "environment" ? "environment" : "tersimpan"}` : "Secret belum diatur"}</dd></div>
             <div><dt>Terakhir diperbarui</dt><dd>{config?.cookieUpdatedAt ? new Date(config.cookieUpdatedAt).toLocaleString("id-ID") : "-"}</dd></div>
             <div><dt>Terakhir sync</dt><dd>{config?.lastRunAt ? new Date(config.lastRunAt).toLocaleString("id-ID") : "-"}</dd></div>
+            <div><dt>Hasil sync</dt><dd>{config?.lastRunMessage ?? "-"}</dd></div>
             <div><dt>Refresh</dt><dd>Setiap {config?.refreshIntervalMinutes ?? form.refreshIntervalMinutes} menit</dd></div>
             <div><dt>Warehouse</dt><dd>{config?.warehouseCode ?? form.warehouseCode} · {config?.warehouseTimezone ?? form.warehouseTimezone}</dd></div>
             <div><dt>Hasil</dt><dd>{config?.lastMessage ?? "-"}</dd></div>
