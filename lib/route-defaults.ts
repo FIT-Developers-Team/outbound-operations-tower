@@ -59,6 +59,152 @@ export function dropLabel(index: number) {
   return `DROP ${index + 1}`;
 }
 
+export const ROUTE_CSV_HEADERS = [
+  "Kode",
+  "Nama Tujuan",
+  "Wave",
+  "Drop",
+  "Route",
+  "Bulan Aktif",
+] as const;
+
+function csvCell(value: string) {
+  return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+}
+
+/**
+ * A template that is already filled with the current route plan, so an operator
+ * edits real rows instead of guessing what each column wants.
+ */
+export function buildRoutePlanCsv(
+  effectiveMonth: string,
+  plan: RoutePlanEntry[] = defaultRoutePlan,
+) {
+  // A destination resolves to one rule per month, and the lowest route number
+  // wins. Emitting a code twice would produce a template that cannot be
+  // uploaded back, so the later appearance is dropped and the file shows the
+  // mapping that actually takes effect.
+  const emitted = new Set<string>();
+  const rows = plan.flatMap((route) =>
+    route.drops.flatMap((drop, index) => {
+      const code = drop.trim().toUpperCase();
+      if (emitted.has(code)) return [];
+      emitted.add(code);
+      return [
+        [
+          code,
+          code,
+          route.wave,
+          dropLabel(index),
+          String(route.routeNo),
+          effectiveMonth,
+        ],
+      ];
+    }),
+  );
+  return [ROUTE_CSV_HEADERS, ...rows]
+    .map((row) => row.map(csvCell).join(","))
+    .join("\n");
+}
+
+/** Splits one CSV line, honouring quoted fields that contain commas. */
+function splitCsvLine(line: string) {
+  const cells: string[] = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (quoted) {
+      if (character === '"' && line[index + 1] === '"') {
+        cell += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        cell += character;
+      }
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ",") {
+      cells.push(cell);
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  cells.push(cell);
+  return cells.map((value) => value.trim());
+}
+
+/**
+ * Reads the bulk format back into rules. Rows are reported individually rather
+ * than failing the whole file, so one bad line does not discard the rest, and
+ * an id already held by the same destination and month is reused so a re-upload
+ * edits that row instead of stacking a duplicate beside it.
+ */
+export function parseRoutePlanCsv(
+  text: string,
+  existing: DestinationRule[] = [],
+): { rules: DestinationRule[]; errors: string[] } {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return { rules: [], errors: ["File kosong."] };
+
+  const header = splitCsvLine(lines[0]).map((cell) => cell.toLowerCase());
+  const expected = ROUTE_CSV_HEADERS.map((cell) => cell.toLowerCase());
+  if (expected.some((name, index) => header[index] !== name)) {
+    return {
+      rules: [],
+      errors: [`Baris judul harus tepat: ${ROUTE_CSV_HEADERS.join(", ")}.`],
+    };
+  }
+
+  const reusableIds = new Map(
+    existing.map((rule) => [
+      `${rule.destinationCode.toUpperCase()}::${rule.effectiveMonth}`,
+      rule.id,
+    ]),
+  );
+  const rules: DestinationRule[] = [];
+  const errors: string[] = [];
+  const seen = new Set<string>();
+
+  lines.slice(1).forEach((line, index) => {
+    const lineNo = index + 2;
+    const [code, name, wave, drop, route, month] = splitCsvLine(line);
+    const upperCode = (code ?? "").toUpperCase();
+    if (!upperCode) return errors.push(`Baris ${lineNo}: Kode kosong.`);
+    if (!wave) return errors.push(`Baris ${lineNo}: Wave kosong.`);
+    if (!drop) return errors.push(`Baris ${lineNo}: Drop kosong.`);
+    if (!/^\d{4}-\d{2}$/.test(month ?? "")) {
+      return errors.push(`Baris ${lineNo}: Bulan Aktif harus YYYY-MM.`);
+    }
+    const sequence = Number(route);
+    if (!Number.isFinite(sequence) || sequence < 0) {
+      return errors.push(`Baris ${lineNo}: Route harus angka.`);
+    }
+    const key = `${upperCode}::${month}`;
+    if (seen.has(key)) {
+      return errors.push(`Baris ${lineNo}: ${upperCode} ganda untuk ${month}.`);
+    }
+    seen.add(key);
+    rules.push({
+      id: reusableIds.get(key) ?? `RT-${month}-${String(sequence).padStart(2, "0")}-${upperCode}`,
+      effectiveMonth: month,
+      destinationCode: upperCode,
+      destinationName: name || upperCode,
+      wave,
+      drop,
+      sequence,
+      active: true,
+    });
+  });
+
+  return { rules, errors };
+}
+
 /**
  * Expand the route plan into the per-destination rules the app stores. An id
  * already held by a destination in the same month is reused, so applying the

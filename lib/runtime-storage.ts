@@ -36,9 +36,20 @@ const MINIMUM_SECRET_LENGTH = 32;
 let schemaReady: Promise<boolean> | null = null;
 let generatedSecretCache: string | null = null;
 
+/**
+ * CSV names each column once instead of repeating it on every row, which for a
+ * wide export is the difference between a month that fits the runtime and one
+ * that does not. A path the operator typed themselves is left alone.
+ */
 function normalizeExportPath(pathTemplate: string | null | undefined) {
   const path = pathTemplate?.trim();
-  if (!path || path === LEGACY_CSV_PATH) return DEFAULT_PATH;
+  const preferred =
+    runtimeEnv("SUPERSET_EXPORT_FORMAT")?.trim().toLowerCase() === "csv"
+      ? LEGACY_CSV_PATH
+      : DEFAULT_PATH;
+  if (!path || path === LEGACY_CSV_PATH || path === DEFAULT_PATH) {
+    return preferred;
+  }
   return path;
 }
 

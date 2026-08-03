@@ -261,8 +261,19 @@ async function fetchExport(
       "Superset mengarahkan ke halaman login. Cookie kemungkinan kedaluwarsa.",
     );
   }
-  if (body.length > 45_000_000) {
-    throw new Error("Export Superset melebihi batas aman 45 MB.");
+  // The ceiling protects the runtime, which holds the raw text, the parsed
+  // structure, and the records at the same time. It is configurable because the
+  // safe value depends on where this runs, and a fixed 45 MB blocks a warehouse
+  // whose month simply is larger.
+  const limitMb = Math.min(
+    200,
+    Math.max(1, Number(runtimeEnv("SUPERSET_EXPORT_MAX_MB")) || 45),
+  );
+  if (body.length > limitMb * 1_000_000) {
+    const actualMb = (body.length / 1_000_000).toFixed(1);
+    throw new Error(
+      `Export Superset ${actualMb} MB melebihi batas aman ${limitMb} MB. Turunkan ukuran dengan SUPERSET_EXPORT_FORMAT=csv, atau naikkan SUPERSET_EXPORT_MAX_MB bila runtime sanggup.`,
+    );
   }
   const records = parseSupersetExport(body, contentType);
   if (!records.length) {

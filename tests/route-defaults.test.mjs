@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   buildRoutePlanRules,
   defaultRoutePlan,
+  buildRoutePlanCsv,
   diffDestinationRules,
+  parseRoutePlanCsv,
 } from "../lib/route-defaults.ts";
 import { resolveDestinationRule } from "../lib/outbound-logic.ts";
 
@@ -123,4 +125,70 @@ test("destination names come from SO data when the code is already known", () =>
   assert.equal(named.destinationName, "JTI - Jatibening New");
   const unnamed = rules.find((rule) => rule.destinationCode === "SWL");
   assert.equal(unnamed.destinationName, "SWL");
+});
+
+test("the bulk template reads back as the plan it was built from", () => {
+  const csv = buildRoutePlanCsv("2026-08");
+  const { rules, errors } = parseRoutePlanCsv(csv);
+
+  assert.deepEqual(errors, []);
+  // One code short of the 59 drops: CNR appears on route 17 and again on 24,
+  // and only the lower route number can take effect.
+  assert.equal(
+    rules.length,
+    new Set(defaultRoutePlan.flatMap((route) => route.drops)).size,
+  );
+  const apr = rules.find((rule) => rule.destinationCode === "APR");
+  assert.equal(apr.wave, "WAVE 3");
+  assert.equal(apr.drop, "DROP 2");
+  assert.equal(apr.sequence, 27);
+  assert.equal(apr.effectiveMonth, "2026-08");
+});
+
+test("a re-upload edits the stored row instead of adding a second one", () => {
+  const existing = parseRoutePlanCsv(buildRoutePlanCsv("2026-08")).rules;
+  const again = parseRoutePlanCsv(buildRoutePlanCsv("2026-08"), existing).rules;
+
+  assert.deepEqual(
+    again.map((rule) => rule.id).sort(),
+    existing.map((rule) => rule.id).sort(),
+  );
+});
+
+test("a bad row is reported without discarding the rest of the file", () => {
+  const csv = [
+    "Kode,Nama Tujuan,Wave,Drop,Route,Bulan Aktif",
+    "SWL,SWL - Sawangan,WAVE 1,DROP 1,1,2026-08",
+    ",Tanpa kode,WAVE 1,DROP 2,1,2026-08",
+    "PSG,PSG,WAVE 1,DROP 2,1,Agustus",
+    "MRY,MRY,WAVE 1,DROP 1,dua,2026-08",
+    "CSA,CSA,WAVE 1,DROP 1,3,2026-08",
+  ].join("\n");
+
+  const { rules, errors } = parseRoutePlanCsv(csv);
+
+  assert.deepEqual(rules.map((rule) => rule.destinationCode), ["SWL", "CSA"]);
+  assert.equal(errors.length, 3);
+  assert.match(errors[0], /Baris 3: Kode kosong/);
+  assert.match(errors[1], /Baris 4: Bulan Aktif harus YYYY-MM/);
+  assert.match(errors[2], /Baris 5: Route harus angka/);
+});
+
+test("a file whose header does not match is refused outright", () => {
+  const { rules, errors } = parseRoutePlanCsv("Code,Name\nSWL,SWL");
+
+  assert.deepEqual(rules, []);
+  assert.match(errors[0], /Baris judul harus tepat/);
+});
+
+test("a quoted destination name keeps its comma", () => {
+  const csv = [
+    "Kode,Nama Tujuan,Wave,Drop,Route,Bulan Aktif",
+    '"BSX","BSX - Bekasi, Timur",WAVE 1,DROP 1,5,2026-08',
+  ].join("\n");
+
+  const { rules, errors } = parseRoutePlanCsv(csv);
+
+  assert.deepEqual(errors, []);
+  assert.equal(rules[0].destinationName, "BSX - Bekasi, Timur");
 });

@@ -14,9 +14,12 @@ import {
   shadowedRuleIds,
 } from "@/lib/outbound-logic";
 import {
+  buildRoutePlanCsv,
   buildRoutePlanRules,
   defaultRoutePlan,
   diffDestinationRules,
+  parseRoutePlanCsv,
+  ROUTE_CSV_HEADERS,
 } from "@/lib/route-defaults";
 import {
   useOutbound,
@@ -26,6 +29,7 @@ import {
   Section,
 } from "@/components/ui/primitives";
 import {
+  download,
   dynamicRoutingOptions,
   Modal,
   sortRows,
@@ -236,6 +240,7 @@ export function SettingsView({
   const routing = dynamicRoutingOptions(data);
   const [draft, setDraft] = useState<DestinationRule | null>(null);
   const [planMonth, setPlanMonth] = useState<string | null>(null);
+  const [bulkNote, setBulkNote] = useState("");
   const [sort, setSort] = useState<
     SortState<"destination" | "month" | "wave" | "drop" | "sequence" | "status">
   >({ key: "sequence", direction: "asc" });
@@ -320,11 +325,42 @@ export function SettingsView({
         title="Routing tujuan"
         action={
           <div className="section-actions">
+            <button className="btn" onClick={() => download(buildRoutePlanCsv(effectiveMonth), `template-routing-${effectiveMonth}.csv`)} type="button">Unduh template</button>
+            <label className="btn" htmlFor="routing-bulk">Unggah CSV</label>
+            <input
+              accept=".csv,text/csv"
+              className="visually-hidden"
+              id="routing-bulk"
+              onChange={async (event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (!file) return;
+                const { rules, errors } = parseRoutePlanCsv(
+                  await file.text(),
+                  data.destinationRules,
+                );
+                if (rules.length) onRulesUpdate(rules);
+                setBulkNote(
+                  [
+                    rules.length
+                      ? `${rules.length} mapping dari ${file.name} diterapkan.`
+                      : `Tidak ada baris yang dapat dipakai dari ${file.name}.`,
+                    ...errors.slice(0, 5),
+                    errors.length > 5 ? `dan ${errors.length - 5} baris lain.` : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" "),
+                );
+              }}
+              type="file"
+            />
             <button className="btn" onClick={() => { setDraft(null); setPlanMonth(effectiveMonth); }} type="button">Rute default</button>
             <button className="btn btn-primary" onClick={() => createRule()} type="button">Tambah mapping</button>
           </div>
         }
       >
+        <p className="section-note">Kolom bulk upload: {ROUTE_CSV_HEADERS.join(", ")}. Route diisi nomor urut rute.</p>
+        {bulkNote && <p className="bulk-note" role="status">{bulkNote}</p>}
         <div className="routing-discovery">
           <div>
             <span className="eyebrow">Otomatis dari data SO</span>
