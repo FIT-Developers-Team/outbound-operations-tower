@@ -241,19 +241,24 @@ function OutstandingByPicker({ data }: { data: DemoDataset }) {
           orders: [...orders].sort((a, b) => a.deadline.localeCompare(b.deadline)),
         };
       })
-      .sort((a, b) => b.remaining - a.remaining);
+      .sort((a, b) => b.soCount - a.soCount || b.remaining - a.remaining);
   }, [data.orders, data.pickers]);
 
   const detail = rows.find((row) => row.pickerId === detailPicker) ?? null;
   const totalRemaining = rows.reduce((sum, row) => sum + row.remaining, 0);
+  // Counted across pickers rather than summed per picker: one SO split across
+  // zones can sit with two people, and adding their counts would report it twice.
+  const totalSo = new Set(
+    rows.flatMap((row) => row.orders.map((order) => order.soNumber)),
+  ).size;
 
   return (
     <Section
-      eyebrow={`${rows.length} picker · sisa ${number.format(totalRemaining)} qty`}
+      eyebrow={`${rows.length} picker · sisa ${totalSo} SO · ${number.format(totalRemaining)} qty`}
       title="Sisa SO per picker"
     >
       {rows.length === 0 ? (
-        <p className="empty-note">Tidak ada SO berjalan yang menyisakan qty.</p>
+        <p className="empty-note">Tidak ada SO berjalan yang tersisa.</p>
       ) : (
         <div className="table-scroll">
           <table className="tbl">
@@ -261,7 +266,7 @@ function OutstandingByPicker({ data }: { data: DemoDataset }) {
               <tr>
                 <th>Picker</th>
                 <th>Shift</th>
-                <th className="num">SO</th>
+                <th className="num">Sisa SO</th>
                 <th className="num">SO-zona</th>
                 <th className="num">Sisa qty</th>
                 <th>Progres</th>
@@ -289,9 +294,9 @@ function OutstandingByPicker({ data }: { data: DemoDataset }) {
 
       {detail && (
         <Modal
-          eyebrow={`${detail.soCount} SO · ${detail.zoneRows} SO-zona`}
+          eyebrow={`${detail.zoneRows} SO-zona · sisa ${number.format(detail.remaining)} qty`}
           onClose={() => setDetailPicker(null)}
-          title={`${detail.name} · sisa ${number.format(detail.remaining)} qty`}
+          title={`${detail.name} · sisa ${detail.soCount} SO`}
           wide
         >
           <div className="table-scroll">
