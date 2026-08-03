@@ -92,7 +92,7 @@ test("server-renders every operational area", async () => {
     ["/checker", /Route checker/i],
     ["/reports", /Kualitas sumber/i],
     ["/settings", /Koneksi Superset/i],
-    ["/guide", /Alur kerja/i],
+    ["/guide", /Langkah kerja/i],
   ];
 
   for (const [pathname, expected] of routes) {
