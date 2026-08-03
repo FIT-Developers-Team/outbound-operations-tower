@@ -86,6 +86,31 @@ function isDataset(value: unknown): value is DemoDataset {
   );
 }
 
+/** Re-resolves every order's wave and drop against a rule set. */
+function withDestinationRules(
+  dataset: DemoDataset,
+  rules: DestinationRule[],
+): DemoDataset {
+  const index = buildDestinationRuleIndex(
+    dataset.sourceProfile.sourceDate,
+    rules,
+  );
+  return {
+    ...dataset,
+    destinationRules: rules,
+    orders: dataset.orders.map((order) => {
+      const resolved =
+        index.get(extractDestinationCode(order.destination)) ?? null;
+      return {
+        ...order,
+        wave: resolved?.wave ?? "UNMAPPED",
+        drop: resolved?.drop ?? "UNMAPPED",
+        mappingStatus: resolved ? ("MAPPED" as const) : ("UNMAPPED" as const),
+      };
+    }),
+  };
+}
+
 function stableCommandKey(action: string) {
   return `${action}:${new Date().toISOString().slice(0, 10)}:${crypto.randomUUID()}`;
 }
@@ -464,37 +489,30 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
     showNotice,
   ]);
 
+  // Mirrors the rules on screen so a rejected save can put them back. Reading
+  // them out of a state updater instead would run twice under StrictMode.
+  const rulesOnScreen = useRef<DestinationRule[]>(data.destinationRules);
+  useEffect(() => {
+    rulesOnScreen.current = data.destinationRules;
+  }, [data.destinationRules]);
+
   // Routing is stored on the server in its own table, so it is applied to
   // whatever dataset is on screen — live snapshot or sample — and survives a
   // reload either way.
+  const setRulesLocally = useCallback((rules: DestinationRule[]) => {
+    setData((current) => withDestinationRules(current, rules));
+  }, []);
+
   const applyRulesLocally = useCallback((incoming: DestinationRule[]) => {
-      setData((current) => {
-        // Map#set keeps the position of a key it already holds, so edits stay
-        // in place and only genuinely new mappings land at the end.
-        const byId = new Map(
-          current.destinationRules.map((item) => [item.id, item]),
-        );
-        incoming.forEach((rule) => byId.set(rule.id, rule));
-        const rules = [...byId.values()];
-        const index = buildDestinationRuleIndex(
-          current.sourceProfile.sourceDate,
-          rules,
-        );
-        return {
-          ...current,
-          destinationRules: rules,
-          orders: current.orders.map((order) => {
-            const resolved =
-              index.get(extractDestinationCode(order.destination)) ?? null;
-            return {
-              ...order,
-              wave: resolved?.wave ?? "UNMAPPED",
-              drop: resolved?.drop ?? "UNMAPPED",
-              mappingStatus: resolved ? "MAPPED" : "UNMAPPED",
-            };
-          }),
-        };
-      });
+    setData((current) => {
+      // Map#set keeps the position of a key it already holds, so edits stay
+      // in place and only genuinely new mappings land at the end.
+      const byId = new Map(
+        current.destinationRules.map((item) => [item.id, item]),
+      );
+      incoming.forEach((rule) => byId.set(rule.id, rule));
+      return withDestinationRules(current, [...byId.values()]);
+    });
   }, []);
 
   const updateRules = useCallback(
@@ -503,6 +521,7 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
       // Shown immediately, then stored. The generic command helper reloads the
       // dataset on success, which would discard the change while the workspace
       // is still on sample data because no snapshot exists to reload from.
+      const before = rulesOnScreen.current;
       applyRulesLocally(incoming);
       setProposals([]);
       try {
@@ -532,16 +551,21 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
             : `${incoming.length} mapping disimpan di server dan tetap berlaku setelah halaman dimuat ulang.`,
         );
       } catch (caught) {
+        // Put the table back. Leaving a rejected mapping on screen is what made
+        // routing look saved until a reload quietly dropped it.
+        setRulesLocally(before);
         showNotice(
           "error",
           "Mapping belum tersimpan",
-          caught instanceof Error
-            ? caught.message
-            : "Mapping routing gagal disimpan.",
+          `${
+            caught instanceof Error
+              ? caught.message
+              : "Mapping routing gagal disimpan."
+          } Perubahan dikembalikan agar tidak terlihat tersimpan.`,
         );
       }
     },
-    [applyRulesLocally, showNotice],
+    [applyRulesLocally, setRulesLocally, showNotice],
   );
 
   const updateRule = useCallback(

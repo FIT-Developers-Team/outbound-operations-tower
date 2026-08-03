@@ -185,7 +185,7 @@ function columnNames(object: Record<string, unknown>, inherited: string[]) {
   return names.length ? names : inherited;
 }
 
-function recordsFromJson(value: unknown, inheritedColumns: string[] = []): RawRecord[] {
+export function recordsFromJson(value: unknown, inheritedColumns: string[] = []): RawRecord[] {
   if (Array.isArray(value)) {
     if (
       inheritedColumns.length &&

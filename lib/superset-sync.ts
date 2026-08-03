@@ -32,12 +32,12 @@ import { runtimeEnv } from "./runtime-env";
 import {
   normalizeSupersetHeader,
   parseSupersetExport,
+  recordsFromJson,
   validateSupersetRecords,
   type RawRecord,
 } from "./superset-payload";
 
 type ExportResult = {
-  body: string;
   contentType: string;
   records: RawRecord[];
   appliedFilters: string[];
@@ -110,12 +110,14 @@ function filterSummary(input: unknown) {
   return [column, operator, valueText].filter(Boolean).join(" ").slice(0, 220);
 }
 
-function readFilterMetadata(body: string, contentType: string) {
-  if (!contentType.includes("json") && !body.trimStart().startsWith("{")) {
-    return { appliedFilters: [], rejectedFilters: [] };
-  }
+/**
+ * Reads the filter metadata from an already parsed payload. A month-sized
+ * export is tens of megabytes, and parsing it a second time just to read these
+ * two arrays doubled the peak memory of a sync for no gain.
+ */
+function filterMetadataFromJson(parsed: unknown) {
   try {
-    const root = JSON.parse(body) as Record<string, unknown>;
+    const root = (parsed ?? {}) as Record<string, unknown>;
     const results = Array.isArray(root.result) ? root.result : [root];
     const appliedFilters = results.flatMap((result) => {
       if (!result || typeof result !== "object") return [];
@@ -203,6 +205,7 @@ async function fetchExport(
   sliceId: string,
   cookie: string,
   month: ReturnType<typeof jakartaMonth>,
+  label: "so" | "staff",
 ): Promise<ExportResult> {
   const url = exportUrl(baseUrl, pathTemplate, sliceId, month);
   // The runtime reports an unreachable host as `internal error; reference = ...`,
@@ -266,8 +269,8 @@ async function fetchExport(
   // safe value depends on where this runs, and a fixed 45 MB blocks a warehouse
   // whose month simply is larger.
   const limitMb = Math.min(
-    200,
-    Math.max(1, Number(runtimeEnv("SUPERSET_EXPORT_MAX_MB")) || 45),
+    500,
+    Math.max(1, Number(runtimeEnv("SUPERSET_EXPORT_MAX_MB")) || 120),
   );
   if (body.length > limitMb * 1_000_000) {
     const actualMb = (body.length / 1_000_000).toFixed(1);
@@ -275,11 +278,29 @@ async function fetchExport(
       `Export Superset ${actualMb} MB melebihi batas aman ${limitMb} MB. Turunkan ukuran dengan SUPERSET_EXPORT_FORMAT=csv, atau naikkan SUPERSET_EXPORT_MAX_MB bila runtime sanggup.`,
     );
   }
-  const records = parseSupersetExport(body, contentType);
+  // Archived here rather than at the end of the sync. Carrying both slices'
+  // text that far meant a month was held twice over while the parsed records
+  // were live as well, which is what the size ceiling was really guarding.
+  await saveRawExport(month.key, label, body, contentType || "text/csv");
+
+  const trimmed = body.trimStart();
+  const isJson =
+    contentType.includes("json") ||
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[");
+  let records: RawRecord[];
+  let filters = { appliedFilters: [] as string[], rejectedFilters: [] as string[] };
+  if (isJson) {
+    const parsed = JSON.parse(body) as unknown;
+    records = recordsFromJson(parsed);
+    filters = filterMetadataFromJson(parsed);
+  } else {
+    records = parseSupersetExport(body, contentType);
+  }
   if (!records.length) {
     throw new Error(`Slice ${sliceId} tidak mengembalikan baris data.`);
   }
-  return { body, contentType, records, ...readFilterMetadata(body, contentType) };
+  return { contentType, records, ...filters };
 }
 
 function value(row: RawRecord, ...names: string[]) {
@@ -878,6 +899,7 @@ export async function syncFromSuperset(
       connector.soSliceId,
       cookie,
       month,
+      "so",
     ),
     fetchExport(
       connector.baseUrl,
@@ -885,6 +907,7 @@ export async function syncFromSuperset(
       connector.staffSliceId,
       cookie,
       month,
+      "staff",
     ),
     loadDatasetSnapshot(),
   ]);
@@ -931,18 +954,6 @@ export async function syncFromSuperset(
   }
   const syncedAt = new Date().toISOString();
   await Promise.all([
-    saveRawExport(
-      month.key,
-      "so",
-      soExport.body,
-      soExport.contentType || "text/csv",
-    ),
-    saveRawExport(
-      month.key,
-      "staff",
-      staffExport.body,
-      staffExport.contentType || "text/csv",
-    ),
   ]);
   const datasetKey = await saveDatasetSnapshot(
     dataset,
