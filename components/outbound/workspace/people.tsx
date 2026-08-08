@@ -331,6 +331,85 @@ function OutstandingByPicker({ data }: { data: DemoDataset }) {
   );
 }
 
+const TARGET_FIELDS = {
+  targetQty: { label: "Target qty / shift", min: 1, max: 100_000, hint: "1–100.000" },
+  maxLoadPct: { label: "Batas load %", min: 1, max: 200, hint: "1–200" },
+} as const;
+
+/**
+ * Editing a target used to send every keystroke to the server, and the reply
+ * replaced the dataset the field read its value from, so the box snapped back
+ * mid-word. It also clamped to 1 while typing, which made the field impossible
+ * to clear. The value is now held locally and written once, on leaving the
+ * field or pressing Enter.
+ */
+function TargetCard({
+  rule,
+  onSave,
+}: {
+  rule: TargetRule;
+  onSave: (rule: TargetRule) => void;
+}) {
+  const [draft, setDraft] = useState({
+    targetQty: String(rule.targetQty),
+    maxLoadPct: String(rule.maxLoadPct),
+  });
+
+  function commit(field: keyof typeof TARGET_FIELDS) {
+    const { min, max } = TARGET_FIELDS[field];
+    const typed = Number(draft[field]);
+    // An empty or nonsense entry restores what was stored rather than writing a
+    // number the operator never chose.
+    const next =
+      Number.isFinite(typed) && typed > 0
+        ? Math.min(max, Math.max(min, Math.round(typed)))
+        : rule[field];
+    setDraft((current) => ({ ...current, [field]: String(next) }));
+    if (next !== rule[field]) onSave({ ...rule, [field]: next });
+  }
+
+  return (
+    <article className="target-card">
+      <span className="badge badge-info">{rule.mpStatus}</span>
+      {(Object.keys(TARGET_FIELDS) as Array<keyof typeof TARGET_FIELDS>).map(
+        (field) => (
+          <label key={field}>
+            <span>{TARGET_FIELDS[field].label}</span>
+            <input
+              aria-label={`${TARGET_FIELDS[field].label} ${rule.mpStatus}`}
+              className="input num"
+              // Text with a numeric keypad rather than type=number: a scroll
+              // wheel over a number field silently changes the value.
+              inputMode="numeric"
+              onBlur={() => commit(field)}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  [field]: event.target.value.replace(/[^\d]/g, ""),
+                }))
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+                if (event.key === "Escape") {
+                  setDraft((current) => ({
+                    ...current,
+                    [field]: String(rule[field]),
+                  }));
+                  event.currentTarget.blur();
+                }
+              }}
+              type="text"
+              value={draft[field]}
+            />
+            <small>{TARGET_FIELDS[field].hint}</small>
+          </label>
+        ),
+      )}
+      <p>{rule.description}</p>
+    </article>
+  );
+}
+
 export function PeopleView({
   data,
   onPickerUpdate,
@@ -492,7 +571,7 @@ export function PeopleView({
       <section className="metric-strip metric-strip-four">
         <KpiCard label="On duty" value={onDuty.length} sub={`${eligibleCount} siap assign`} tone="teal" />
         <KpiCard label="Durasi rata-rata" value={`${avgDuration.toFixed(1)} jam`} sub={`${pickerCount} picker terdata`} tone="accent" />
-        <KpiCard label="Produktivitas" value={`${avgPerHour.toFixed(0)} unit/jam`} sub="Rata-rata picker" />
+        <KpiCard label="Produktivitas" value={`${avgPerHour.toFixed(0)} unit/jam produktif`} sub="Rata-rata picker" />
         <KpiCard label="Output hari ini" value={number.format(totalOutput)} sub="Unit selesai pick" tone="normal" />
       </section>
 
@@ -524,8 +603,8 @@ export function PeopleView({
               <thead>
                 <tr>
                   <SortableHeader column="picker" label="Picker" onSort={setTopSort} sort={topSort} />
-                  <SortableHeader column="duration" label="Durasi" numeric onSort={setTopSort} sort={topSort} />
-                  <SortableHeader column="perHour" label="Unit/jam" numeric onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="duration" label="Jam produktif" numeric onSort={setTopSort} sort={topSort} />
+                  <SortableHeader column="perHour" label="Unit/jam produktif" numeric onSort={setTopSort} sort={topSort} />
                   <SortableHeader column="perDay" label="Per hari" numeric onSort={setTopSort} sort={topSort} />
                   <SortableHeader column="perSku" label="Per SKU" numeric onSort={setTopSort} sort={topSort} />
                   <SortableHeader column="perSo" label="Per SO" numeric onSort={setTopSort} sort={topSort} />
@@ -555,42 +634,20 @@ export function PeopleView({
       <Section eyebrow="Batas beban per status" title="Target picker">
         <div className="target-grid">
           {data.targetRules.map((rule) => (
-            <article className="target-card" key={rule.mpStatus}>
-              <span className="badge badge-info">{rule.mpStatus}</span>
-              <label>
-                <span>Target qty / shift</span>
-                <input
-                  className="input num"
-                  min="1"
-                  onChange={(event) =>
-                    onTargetUpdate({
-                      ...rule,
-                      targetQty: Math.max(1, Number(event.target.value) || 1),
-                    })
-                  }
-                  type="number"
-                  value={rule.targetQty}
-                />
-              </label>
-              <label>
-                <span>Batas load %</span>
-                <input
-                  className="input num"
-                  min="1"
-                  onChange={(event) =>
-                    onTargetUpdate({
-                      ...rule,
-                      maxLoadPct: Math.max(1, Number(event.target.value) || 1),
-                    })
-                  }
-                  type="number"
-                  value={rule.maxLoadPct}
-                />
-              </label>
-              <p>{rule.description}</p>
-            </article>
+            // Keyed on the stored numbers so a change arriving from elsewhere
+            // re-seeds the draft. While typing they do not move, so the field
+            // keeps focus and whatever is half-written stays put.
+            <TargetCard
+              key={`${rule.mpStatus}:${rule.targetQty}:${rule.maxLoadPct}`}
+              onSave={onTargetUpdate}
+              rule={rule}
+            />
           ))}
         </div>
+        <p className="section-note">
+          Nilai tersimpan saat Anda berpindah kolom atau menekan Enter. Escape
+          membatalkan perubahan yang belum tersimpan.
+        </p>
       </Section>
 
       <Section eyebrow={`${sorted.length} picker`} title="Daftar picker">
@@ -674,4 +731,3 @@ export function PeopleView({
     </>
   );
 }
-
