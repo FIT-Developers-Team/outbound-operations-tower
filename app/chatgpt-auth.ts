@@ -7,7 +7,7 @@ export type ChatGPTUser = {
   fullName: string | null;
 };
 
-const USER_EMAIL_HEADER = "oai-authenticated-user-email";
+export const USER_EMAIL_HEADER = "oai-authenticated-user-email";
 const USER_FULL_NAME_HEADER = "oai-authenticated-user-full-name";
 const USER_FULL_NAME_ENCODING_HEADER =
   "oai-authenticated-user-full-name-encoding";
@@ -16,9 +16,20 @@ const SIGN_IN_PATH = "/signin-with-chatgpt";
 const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
 
+// RFC 5321 caps an address at 320 characters. The value reaches D1 as the
+// `actor` on every audit and command receipt, so a header that is not shaped
+// like an address is discarded rather than stored.
+const MAX_EMAIL_LENGTH = 320;
+
+function usableEmail(value: string | null): string | null {
+  const email = value?.trim() ?? "";
+  if (!email || email.length > MAX_EMAIL_LENGTH) return null;
+  return /^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(email) ? email : null;
+}
+
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
-  const email = requestHeaders.get(USER_EMAIL_HEADER);
+  const email = usableEmail(requestHeaders.get(USER_EMAIL_HEADER));
   if (!email) return null;
 
   const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);

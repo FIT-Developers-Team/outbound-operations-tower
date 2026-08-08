@@ -233,6 +233,10 @@ export function splitSupplyOrderLines(
       current.lineCount += 1;
       skuMap.set(key, current);
     });
+    const staffIds = [
+      ...new Set(rows.map((row) => row.pickingStaffId).filter(Boolean)),
+    ];
+    const pickerId = staffIds.length === 1 ? staffIds[0] : null;
 
     return {
       id,
@@ -260,11 +264,10 @@ export function splitSupplyOrderLines(
       ),
       lineCount: rows.length,
       rackLevel: [...new Set(levels)].join(", ") || "-",
-      pickerId:
-        [...new Set(rows.map((row) => row.pickingStaffId).filter(Boolean))].length ===
-        1
-          ? rows.find((row) => row.pickingStaffId)?.pickingStaffId ?? null
-          : null,
+      pickerId,
+      // These rows are source lines, so any picker on them is what the export
+      // reported rather than something staged in this app.
+      assignmentSource: pickerId ? ("SOURCE" as const) : null,
       shift: "PAGI",
       deadline: "14:00",
       createdAt: first.createdAt,

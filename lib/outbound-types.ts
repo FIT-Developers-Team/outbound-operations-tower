@@ -70,6 +70,15 @@ export type SupplyOrder = {
   lineCount: number;
   rackLevel: string;
   pickerId: string | null;
+  /**
+   * Where the current assignment came from.
+   *
+   * `SOURCE` means the Superset export reports the picker, so WMS already
+   * holds it. `LOCAL` means an operator staged it here and WMS has not
+   * confirmed it yet — the state a sync must carry forward instead of
+   * overwriting with an empty source column. `null` means unassigned.
+   */
+  assignmentSource: "SOURCE" | "LOCAL" | null;
   shift: ShiftCode;
   deadline: string;
   createdAt: string;

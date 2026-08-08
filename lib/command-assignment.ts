@@ -138,8 +138,16 @@ export function applyAssignment(
   const updatedAt = operationTime(data);
   data.orders = data.orders.map((order) => {
     const pickerId = assignmentByOrder.get(order.id);
+    // Marked LOCAL so the next sync keeps it rather than reading the still
+    // empty `picking_staff_id` column as proof that nobody was assigned.
     return pickerId
-      ? { ...order, pickerId, status: "ASSIGNED", updatedAt }
+      ? {
+          ...order,
+          pickerId,
+          status: "ASSIGNED",
+          assignmentSource: "LOCAL" as const,
+          updatedAt,
+        }
       : order;
   });
 

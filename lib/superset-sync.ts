@@ -478,6 +478,8 @@ function buildOrders(
       .map((rack) => rack.match(/-(L\d+)-/i)?.[1]?.toUpperCase())
       .filter((item): item is string => Boolean(item));
     const status = normalizeStatus(value(row, "status", "so_status"));
+    const pickerId =
+      group.pickerIds.size === 1 ? [...group.pickerIds][0] : null;
     return {
       id,
       soNumber: value(row, "so_number"),
@@ -501,7 +503,8 @@ function buildOrders(
       ),
       lineCount: group.lineCount,
       rackLevel: [...new Set(levels)].join(", ") || "-",
-      pickerId: group.pickerIds.size === 1 ? [...group.pickerIds][0] : null,
+      pickerId,
+      assignmentSource: pickerId ? ("SOURCE" as const) : null,
       shift: deriveShift(createdAt),
       deadline: "14:00",
       createdAt,
@@ -510,6 +513,57 @@ function buildOrders(
           .slice(11, 16) || "-",
     };
   });
+}
+
+/**
+ * Keeps an operator's staged assignment across a sync.
+ *
+ * buildOrders derives the picker from `picking_staff_id`, so an assignment made
+ * in this app disappears the moment a sync runs before WMS has ingested the
+ * bulk upload and the Superset chart has refreshed. At a five-minute refresh
+ * interval that window never closes, and the assignment silently reverts to
+ * NEW while the operator is still looking at it.
+ *
+ * The source stays authoritative. It wins as soon as it names a picker, and it
+ * wins whenever the row has moved past NEW — a cancelled or already-picked SO
+ * must not be dragged back to an assignment nobody is working. A local
+ * assignment is carried forward only while the source still reports the row as
+ * new and unassigned, which is exactly the window WMS has not caught up with.
+ *
+ * Assignments the source itself reported earlier are never carried: if the
+ * export stops naming a picker, that is the source retracting it, not this app
+ * losing it.
+ */
+export function carryForwardLocalAssignments(
+  orders: SupplyOrder[],
+  previousOrders: SupplyOrder[],
+) {
+  const staged = new Map(
+    previousOrders
+      .filter((order) => order.assignmentSource === "LOCAL" && order.pickerId)
+      .map((order) => [order.id, order]),
+  );
+  if (!staged.size) return { orders, carried: 0, superseded: 0 };
+
+  let carried = 0;
+  let superseded = 0;
+  const merged = orders.map((order) => {
+    const previous = staged.get(order.id);
+    if (!previous) return order;
+    if (order.pickerId || order.status !== "NEW") {
+      superseded += 1;
+      return order;
+    }
+    carried += 1;
+    return {
+      ...order,
+      pickerId: previous.pickerId,
+      status: "ASSIGNED",
+      assignmentSource: "LOCAL" as const,
+      updatedAt: previous.updatedAt,
+    };
+  });
+  return { orders: merged, carried, superseded };
 }
 
 function targetForStatus(status: MpStatus, rules: TargetRule[]) {
@@ -831,7 +885,16 @@ function buildDataset(
     ? storedRoutes
     : (previous?.destinationRules ?? []);
   const targetRules = previous?.targetRules ?? DEFAULT_TARGETS;
-  const orders = buildOrders(soRecords, month, destinationRules);
+  // Merged before pickers are built, so workload, eligibility, capacity checks,
+  // and the checker routes all see the assignment the operator is looking at.
+  const {
+    orders,
+    carried: carriedAssignments,
+    superseded: supersededAssignments,
+  } = carryForwardLocalAssignments(
+    buildOrders(soRecords, month, destinationRules),
+    previous?.orders ?? [],
+  );
   const basePickers = buildPickers(
     staffRecords,
     month,
@@ -914,7 +977,17 @@ function buildDataset(
         }),
         actor: "Superset connector",
         action: "Snapshot bulan berjalan diperbarui",
-        detail: `${soRecords.length.toLocaleString("id-ID")} baris SO dan ${staffRecords.length.toLocaleString("id-ID")} baris staff diproses.`,
+        detail: [
+          `${soRecords.length.toLocaleString("id-ID")} baris SO dan ${staffRecords.length.toLocaleString("id-ID")} baris staff diproses.`,
+          carriedAssignments
+            ? `${carriedAssignments} assignment lokal dipertahankan karena sumber belum melaporkannya.`
+            : "",
+          supersededAssignments
+            ? `${supersededAssignments} assignment lokal digantikan data sumber.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
         tone: "success" as const,
       },
       ...(previous?.audit ?? []),
@@ -976,6 +1049,9 @@ function buildDataset(
         "Picked quantity hanya dihitung dari line dengan picking_end_at terisi.",
         `${missingSchedule} picker row tanpa jadwal; ${missingCheckIn} tanpa check-in.`,
         "Wave dan Drop berasal dari konfigurasi, bukan dari enum aplikasi.",
+        carriedAssignments || supersededAssignments
+          ? `${carriedAssignments} assignment lokal belum terlihat di sumber dan dipertahankan; ${supersededAssignments} sudah digantikan data sumber.`
+          : "Tidak ada assignment lokal yang menunggu konfirmasi sumber.",
       ],
     },
   };

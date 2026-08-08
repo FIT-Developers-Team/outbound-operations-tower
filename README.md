@@ -289,7 +289,7 @@ Variable penting:
 | `OUTBOUND_ADMIN_EMAILS` | production | allowlist operator admin |
 | `OUTBOUND_ADMIN_TOKEN` | self-host | token masuk admin di `/masuk`, minimal 32 karakter |
 | `OUTBOUND_ADMIN_SESSION_DAYS` | self-host | batas absolut sesi admin, default 30 dan maksimum 365 hari |
-| `OUTBOUND_TRUST_PLATFORM_AUTH` | self-host | `false` bila tidak ada auth proxy platform di depan aplikasi |
+| `OUTBOUND_TRUST_PLATFORM_AUTH` | Sites | opt-in; hanya `true` yang mempercayai header identitas. Wajib `true` di Sites, biarkan kosong di self-host |
 | `OUTBOUND_WAREHOUSE_CODE` | bootstrap | kode warehouse, contoh `CBT` |
 | `OUTBOUND_WAREHOUSE_NAME` | bootstrap | nama warehouse |
 | `OUTBOUND_WAREHOUSE_TIMEZONE` | bootstrap | zona waktu IANA |
@@ -612,7 +612,13 @@ Entry point menulis variable tersebut ke file env dengan permission `600` di lua
 
 ### Akses admin
 
-Pada Sites, identitas operator berasal dari header `oai-authenticated-user-email` yang dikontrol auth proxy platform. Reverse proxy biasa meneruskan header klien apa adanya, sehingga di runtime self-host header tersebut **tidak boleh** dipercaya: siapa pun bisa mengirimkannya dan mengaku admin. Karena itu image menyetel `OUTBOUND_TRUST_PLATFORM_AUTH=false`, dan admin masuk lewat token.
+Pada Sites, identitas operator berasal dari header `oai-authenticated-user-email` yang dikontrol auth proxy platform. Reverse proxy biasa meneruskan header klien apa adanya, sehingga di runtime self-host header tersebut **tidak boleh** dipercaya: siapa pun bisa mengirimkannya dan mengaku admin.
+
+Karena itu kepercayaan pada header ini bersifat **opt-in**. Hanya string `true` yang mengaktifkannya; nilai lain — termasuk variable yang tidak diset — menolak header tersebut. Deployment yang lupa menyetelnya kehilangan platform sign-in, bukan menerima identitas palsu.
+
+> **Pada Sites, `OUTBOUND_TRUST_PLATFORM_AUTH=true` wajib diset eksplisit.** Tanpa itu operator akan diminta masuk lewat `/masuk`, dan respons 401 akan menyebutkan variable ini sebagai penyebabnya.
+
+Pada self-host, biarkan tidak diset (image tetap menyetelnya `false`) dan admin masuk lewat token.
 
 1. Buat token minimal 32 karakter:
 

@@ -1111,6 +1111,14 @@ function normalizeDataset(data: DemoDataset): DemoDataset {
       ...order,
       remarks: order.remarks ?? [],
       skuDetails: order.skuDetails ?? [],
+      // A snapshot written before assignment provenance existed carries no
+      // marker. Reading those as SOURCE keeps the first sync after this deploy
+      // from resurrecting an assignment the export had legitimately retracted.
+      // The cost is that assignments staged in the minutes before the deploy
+      // are still dropped once, which is the old behaviour rather than a new
+      // one. An unassigned order resolves to null either way.
+      assignmentSource:
+        order.assignmentSource ?? (order.pickerId ? "SOURCE" : null),
     })),
     sourceProfile: {
       ...data.sourceProfile,

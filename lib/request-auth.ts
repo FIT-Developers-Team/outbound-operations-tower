@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import {
   getChatGPTUser,
+  USER_EMAIL_HEADER,
   type ChatGPTUser,
 } from "@/app/chatgpt-auth";
 import { ADMIN_SESSION_COOKIE, readAdminSession } from "./admin-session";
@@ -57,14 +58,21 @@ export function adminEmails() {
 }
 
 /**
- * Sites authenticates the operator in front of the Worker and controls the
- * identity header itself. A self-hosted runtime sits behind a proxy that
- * forwards client headers verbatim, where trusting the header would let any
- * caller name themselves an admin, so the container image sets this to false.
+ * Whether `oai-authenticated-user-email` may be read as proof of identity.
+ *
+ * Sites authenticates the operator in front of the Worker and controls that
+ * header itself. A plain reverse proxy forwards client headers verbatim, so
+ * anyone could send the header and name themselves an admin.
+ *
+ * Trust is therefore opt-in and requires the literal string `true`. An unset
+ * or unrecognised value means "no proxy owns this header", which is the only
+ * safe reading for a runtime nobody has configured yet — a deployment that
+ * forgets the variable loses platform sign-in rather than silently accepting a
+ * forged one. authRequiredMessage() explains the situation when it happens.
  */
 function platformAuthTrusted() {
   return (
-    runtimeEnv("OUTBOUND_TRUST_PLATFORM_AUTH")?.trim().toLowerCase() !== "false"
+    runtimeEnv("OUTBOUND_TRUST_PLATFORM_AUTH")?.trim().toLowerCase() === "true"
   );
 }
 
@@ -133,6 +141,14 @@ export function anonymousReadEnabled() {
 export function authRequiredMessage(request: NextRequest) {
   if (isLocalRequest(request)) {
     return "Preview lokal belum diberi izin. Siapkan .dev.vars lalu jalankan ulang npm run start.";
+  }
+  // The identity header arriving while trust is off is the one rejection an
+  // operator cannot diagnose from a bare 401: the deployment looks signed in
+  // and is refused anyway. Name the variable that decides it, because on a
+  // platform runtime this is a missing setting, and behind a plain reverse
+  // proxy it is the header being forwarded from the client as it should be.
+  if (!platformAuthTrusted() && request.headers.get(USER_EMAIL_HEADER)) {
+    return "Header identitas platform diterima tetapi tidak dipercaya karena OUTBOUND_TRUST_PLATFORM_AUTH belum diset true. Set variabel itu hanya bila ada auth proxy yang menghapus lalu menyuntikkan ulang header tersebut; bila tidak, masuk lewat /masuk.";
   }
   // A self-hosted runtime has no platform sign-in to fall back on, so the
   // operator is always sent to /masuk. That page reports whether the token is

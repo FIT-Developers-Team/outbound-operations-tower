@@ -70,10 +70,22 @@ const bindings = Object.fromEntries(
   ),
 );
 
-// Read by lib/request-auth.ts. A reverse proxy forwards client headers
-// verbatim, so the Sites identity header is never proof of identity here.
+// Read by lib/request-auth.ts, which treats only the literal `true` as opt-in.
+// Passed explicitly so the value serving traffic is visible in the binding log
+// rather than being inferred from an absent variable.
 bindings.OUTBOUND_TRUST_PLATFORM_AUTH =
-  process.env.OUTBOUND_TRUST_PLATFORM_AUTH ?? "false";
+  process.env.OUTBOUND_TRUST_PLATFORM_AUTH?.trim().toLowerCase() === "true"
+    ? "true"
+    : "false";
+
+// This runtime is reached through a plain reverse proxy, which forwards client
+// headers verbatim. Turning trust on here hands admin to anyone who sends the
+// header, so it is worth saying out loud rather than leaving in the log line.
+if (bindings.OUTBOUND_TRUST_PLATFORM_AUTH === "true") {
+  console.warn(
+    "Peringatan: OUTBOUND_TRUST_PLATFORM_AUTH=true. Header oai-authenticated-user-email akan diterima sebagai identitas. Ini hanya aman bila ada auth proxy di depan yang menghapus header itu dari klien lalu menyuntikkannya sendiri. Tanpa proxy tersebut, siapa pun dapat mengaku admin.",
+  );
+}
 
 const adminToken = process.env.OUTBOUND_ADMIN_TOKEN?.trim() ?? "";
 // The localhost bypass still grants admin without a token, so saying the

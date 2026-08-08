@@ -453,6 +453,9 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
               ...order,
               pickerId: proposal.pickerId,
               status: "ASSIGNED" as const,
+              // Matches what the server records for a live assignment, so the
+              // sample workspace shows the same provenance the real one does.
+              assignmentSource: "LOCAL" as const,
               updatedAt: new Date().toLocaleTimeString("en-GB", {
                 hour: "2-digit",
                 minute: "2-digit",
