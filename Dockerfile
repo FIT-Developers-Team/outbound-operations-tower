@@ -27,8 +27,6 @@ RUN rm -rf \
       node_modules/@rolldown \
       node_modules/@tailwindcss \
       node_modules/@vitejs \
-      node_modules/drizzle-kit \
-      node_modules/drizzle-orm \
       node_modules/esbuild \
       node_modules/eslint \
       node_modules/eslint-config-next \

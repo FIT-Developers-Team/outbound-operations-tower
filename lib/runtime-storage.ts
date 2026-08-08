@@ -239,6 +239,19 @@ export function ensureRuntimeSchema() {
   return schemaReady;
 }
 
+/**
+ * The single definition of the D1 schema.
+ *
+ * A parallel set of Drizzle migrations used to be generated from db/schema.ts
+ * and packaged into the build, which meant a Sites deployment applied those at
+ * deploy time while a self-hosted one only ever ran the statements below. The
+ * two had already drifted — this function creates destination_routes_code_idx
+ * and the migrations never did — so a database's shape depended on which path
+ * had deployed it. The migrations are gone; this is what runs everywhere.
+ *
+ * Adding a column: extend the CREATE TABLE for new databases, then add a
+ * PRAGMA-guarded ALTER below it so existing ones catch up. Both are needed.
+ */
 async function initializeRuntimeSchema() {
   const env = await runtimeBindings();
   if (!env.DB) return false;

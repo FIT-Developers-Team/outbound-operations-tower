@@ -225,8 +225,6 @@ components/
   outbound/
     outbound-provider.tsx  state, cache, command client
     outbound-workspace.tsx seluruh workspace operasional
-db/schema.ts               schema D1
-drizzle/                   migration SQL
 lib/
   admin-session.ts         cookie sesi admin bertanda tangan
   demo-data.ts             fallback deterministik
@@ -285,7 +283,7 @@ Variable penting:
 | Variable | Wajib | Fungsi |
 |---|---:|---|
 | `OUTBOUND_ALLOW_LOCAL_ADMIN` | lokal | izinkan write hanya untuk hostname localhost |
-| `OUTBOUND_ALLOW_ANONYMOUS_READ` | lokal/preview | izinkan snapshot dibaca tanpa login |
+| `OUTBOUND_ALLOW_ANONYMOUS_READ` | lokal/preview | izinkan snapshot dibaca tanpa login. Default `false`: snapshot memuat nama staff, tanggal join, jam check-in, dan produktivitas per orang. Tidak pernah membuka sync |
 | `OUTBOUND_ADMIN_EMAILS` | production | allowlist operator admin |
 | `OUTBOUND_ADMIN_TOKEN` | self-host | token masuk admin di `/masuk`, minimal 32 karakter |
 | `OUTBOUND_ADMIN_SESSION_DAYS` | self-host | batas absolut sesi admin, default 30 dan maksimum 365 hari |
@@ -411,7 +409,7 @@ Idempotency-Key: sync:<uuid>
 {"mode":"manual"}
 ```
 
-Mode `manual` membutuhkan admin. Mode `auto` dapat dipanggil pembaca anonim bila `OUTBOUND_ALLOW_ANONYMOUS_READ=true`, tetapi selalu tunduk pada freshness gate dan D1 lease.
+Kedua mode membutuhkan operator yang sudah masuk — sync menarik export sebulan dari Superset memakai cookie tersimpan dan menghabiskan CPU Worker, sehingga tidak pernah terbuka untuk anonim walaupun `OUTBOUND_ALLOW_ANONYMOUS_READ=true`. Mode `manual` selanjutnya membutuhkan admin; mode `auto` terbuka untuk operator mana pun yang sudah masuk karena itu refresh bersama yang diikuti semua tab. Keduanya tetap tunduk pada freshness gate dan D1 lease.
 
 ### Menyimpan konfigurasi
 
@@ -645,7 +643,7 @@ docker build -t outbound-operations-hub .
 docker run --rm -p 3000:3000 -v outbound-state:/data --env-file .dev.vars outbound-operations-hub
 ```
 
-Migration `drizzle/*.sql` diterapkan otomatis pada setiap start dan bersifat idempoten melalui tabel `d1_migrations`. Jika migration gagal, container berhenti sebelum runtime dijalankan agar schema tidak dipakai setengah jadi.
+Schema D1 dibuat oleh `initializeRuntimeSchema()` pada `lib/runtime-storage.ts`, dijalankan sekali per isolate saat request pertama menyentuh database. Seluruh pernyataannya `IF NOT EXISTS` atau dijaga `PRAGMA table_info`, sehingga aman dijalankan berulang dan sama persis di Sites maupun self-host. Tidak ada langkah migrasi terpisah saat start.
 
 ## Performa dan keamanan
 

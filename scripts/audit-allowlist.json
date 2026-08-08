@@ -1,0 +1,21 @@
+{
+  "comment": [
+    "Advisories that are triaged and knowingly tolerated. Every entry needs a",
+    "reason and a reviewOn date. scripts/audit-gate.mjs fails the build when an",
+    "entry is past its review date, and also when an entry no longer matches a",
+    "live advisory, so this file cannot quietly turn into a blindfold.",
+    "Nothing here is a judgement that the advisory is wrong; it records that no",
+    "upstream fix exists yet and why the exposure is acceptable meanwhile."
+  ],
+  "allow": [
+    {
+      "package": "image-size",
+      "advisories": [
+        "GHSA-w3rx-r6r6-pgpr",
+        "GHSA-5p2g-fcmc-qvqq"
+      ],
+      "reason": "Infinite loop in the ICNS/JXL/HEIF parsers. Reached only through vinext's image optimizer, which resolves every source through the ASSETS binding, so the input is this app's own bundled files rather than anything a caller supplies. image-size 2.0.2 is the newest release and the advisory covers <=2.0.2, so no fixed version exists to move to. vinext 0.0.50 pins it, and the only version npm offers is a downgrade to 0.0.45 that predates this runtime; revisit when vinext 1.x leaves beta.",
+      "reviewOn": "2026-11-08"
+    }
+  ]
+}

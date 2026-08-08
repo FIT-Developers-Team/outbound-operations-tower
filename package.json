@@ -12,24 +12,23 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --experimental-strip-types --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "audit:gate": "node scripts/audit-gate.mjs"
   },
   "dependencies": {
-    "drizzle-orm": "0.45.2",
     "lucide-react": "^1.27.0",
+    "miniflare": "5.20260801.1-alpha",
     "next": "16.2.12",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.47.0",
+    "@cloudflare/vite-plugin": "^1.51.1",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "eslint": "9.39.5",
     "eslint-config-next": "16.2.12",
     "react-server-dom-webpack": "19.2.8",
@@ -37,7 +36,7 @@
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.1.5",
-    "wrangler": "4.114.0"
+    "wrangler": "^4.120.0"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {

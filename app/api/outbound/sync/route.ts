@@ -9,7 +9,6 @@ import {
   saveStoredConnector,
 } from "@/lib/runtime-storage";
 import {
-  anonymousReadEnabled,
   authRequiredMessage,
   isSameOrigin,
   getOutboundAccess,
@@ -47,10 +46,15 @@ export async function POST(request: NextRequest) {
       ? "auto"
       : "manual";
   const access = await getOutboundAccess(request);
-  if (
-    (!access.authenticated && !anonymousReadEnabled()) ||
-    (mode === "manual" && !access.authenticated)
-  ) {
+  // Sync is never anonymous, even where reads are. It reaches out to Superset
+  // with the stored session cookie and spends the Worker's CPU budget parsing a
+  // month-sized export, so an unauthenticated caller could otherwise drive both
+  // the outbound traffic and the refresh cadence of the whole deployment.
+  //
+  // Auto mode stays open to any signed-in operator because it is the shared
+  // background refresh every tab participates in; only a deliberate manual pull
+  // is restricted to admins.
+  if (!access.authenticated) {
     return error(401, "AUTH_REQUIRED", authRequiredMessage(request));
   }
   if (mode === "manual" && !access.admin) {

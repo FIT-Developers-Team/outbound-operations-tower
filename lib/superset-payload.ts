@@ -115,59 +115,104 @@ function normalizeRecord(record: Record<string, unknown>): RawRecord {
   );
 }
 
+/** Offset of the earliest delimiter, newline, or quote at or after `from`. */
+function nextStop(value: string, from: number, delimiter: string) {
+  const atDelimiter = value.indexOf(delimiter, from);
+  const atNewline = value.indexOf("\n", from);
+  const atQuote = value.indexOf('"', from);
+  let stop = atDelimiter;
+  if (atNewline !== -1 && (stop === -1 || atNewline < stop)) stop = atNewline;
+  if (atQuote !== -1 && (stop === -1 || atQuote < stop)) stop = atQuote;
+  return stop;
+}
+
 /**
  * RFC-4180 compatible parser for Superset CSV/TSV exports, including quoted
  * delimiters and quoted line breaks.
+ *
+ * Scans by jumping to the next interesting character with indexOf and slicing
+ * whole spans, rather than walking one character at a time and growing a field
+ * with `+=`. On a month-sized export the difference is not academic: the older
+ * loop ran 40 million iterations and allocated a short-lived string for each
+ * one, which is CPU this runtime does not have and garbage the isolate cannot
+ * absorb. Records are emitted as the scan reaches each row instead of first
+ * collecting every row as `string[][]`, so the split cells and the finished
+ * records are never both resident.
  */
 export function parseDelimited(value: string): RawRecord[] {
   const delimiter = detectDelimiter(value);
-  const rows: string[][] = [];
+  const length = value.length;
+  const records: RawRecord[] = [];
+  let headers: string[] | null = null;
   let row: string[] = [];
   let field = "";
-  let quoted = false;
+  let index = 0;
 
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-    if (quoted) {
-      if (character === '"' && value[index + 1] === '"') {
-        field += '"';
-        index += 1;
-      } else if (character === '"') {
-        quoted = false;
-      } else {
-        field += character;
-      }
-      continue;
+  const endRow = () => {
+    // CRLF leaves its carriage return on the last field of the line.
+    const last = row.length - 1;
+    if (last >= 0 && row[last].endsWith("\r")) {
+      row[last] = row[last].slice(0, -1);
     }
-    if (character === '"') {
-      quoted = true;
-    } else if (character === delimiter) {
+    const columns = headers;
+    if (!columns) {
+      headers = row.map(normalizeSupersetHeader);
+    } else if (row.some((cell) => cell.trim().length > 0)) {
+      const record: RawRecord = {};
+      for (let column = 0; column < columns.length; column += 1) {
+        const header = columns[column];
+        record[header] = normalizeCell(header, row[column] ?? "");
+      }
+      records.push(record);
+    }
+    row = [];
+  };
+
+  while (index < length) {
+    const stop = nextStop(value, index, delimiter);
+    if (stop === -1) {
+      field += value.slice(index);
+      index = length;
+      break;
+    }
+    if (stop > index) field += value.slice(index, stop);
+    const character = value[stop];
+    index = stop + 1;
+
+    if (character === delimiter) {
       row.push(field);
       field = "";
     } else if (character === "\n") {
-      row.push(field.replace(/\r$/, ""));
-      rows.push(row);
-      row = [];
+      row.push(field);
       field = "";
+      endRow();
     } else {
-      field += character;
+      // An opening quote. Consume to the closing one, turning "" into a
+      // literal quote, and let the scan continue in the same field afterwards
+      // so `"ab"cd` still reads as `abcd`.
+      for (;;) {
+        const close = value.indexOf('"', index);
+        if (close === -1) {
+          field += value.slice(index);
+          index = length;
+          break;
+        }
+        if (close > index) field += value.slice(index, close);
+        if (value[close + 1] === '"') {
+          field += '"';
+          index = close + 2;
+          continue;
+        }
+        index = close + 1;
+        break;
+      }
     }
   }
   if (field.length || row.length) {
-    row.push(field.replace(/\r$/, ""));
-    rows.push(row);
+    row.push(field);
+    endRow();
   }
-  const headers = (rows.shift() ?? []).map(normalizeSupersetHeader);
-  return rows
-    .filter((values) => values.some((item) => item.trim().length > 0))
-    .map((values) =>
-      Object.fromEntries(
-        headers.map((header, index) => [
-          header,
-          normalizeCell(header, values[index] ?? ""),
-        ]),
-      ),
-    );
+  return records;
 }
 
 function columnNames(object: Record<string, unknown>, inherited: string[]) {

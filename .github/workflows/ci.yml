@@ -38,5 +38,9 @@ jobs:
       - name: Test production build
         run: npm test
 
-      - name: Audit production dependencies
-        run: npm audit --omit=dev
+      # Audits the whole installed tree, not just what npm labels as runtime.
+      # scripts/serve.mjs serves production on Miniflare, which arrives through
+      # the dev tree, so `--omit=dev` reported a clean bill of health while five
+      # high-severity undici advisories sat in the request path.
+      - name: Audit dependencies
+        run: npm run audit:gate

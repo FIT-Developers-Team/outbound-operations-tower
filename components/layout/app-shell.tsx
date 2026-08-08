@@ -74,6 +74,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [commandQuery, setCommandQuery] = useState("");
   const [dark, setDark] = useState(false);
   const [autoSyncMinutes, setAutoSyncMinutes] = useState(5);
+  // Sync requires a signed-in operator. A viewer on a deployment with anonymous
+  // read would otherwise post a doomed refresh on every interval, once per tab.
+  const [canSync, setCanSync] = useState(false);
   const lastAutoSync = useRef(0);
 
   useEffect(() => {
@@ -87,6 +90,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (payload.config?.refreshIntervalMinutes) {
           setAutoSyncMinutes(payload.config.refreshIntervalMinutes);
         }
+      })
+      .catch(() => undefined);
+    void fetch("/api/outbound/session", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload: { authenticated?: boolean }) => {
+        setCanSync(payload.authenticated === true);
       })
       .catch(() => undefined);
     const onRefreshInterval = (event: Event) => {
@@ -104,6 +113,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   const runAutoSync = useCallback(async () => {
+    if (!canSync) return;
     if (document.visibilityState !== "visible") return;
     if (navigator.locks) {
       await navigator.locks.request(
@@ -126,7 +136,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       forceSource: true,
       sourceMode: "auto",
     });
-  }, [refresh]);
+  }, [canSync, refresh]);
 
   // A hidden tab must not wake the device. The interval is torn down instead of
   // fired-and-ignored, and a tab that comes back only syncs when its turn was
