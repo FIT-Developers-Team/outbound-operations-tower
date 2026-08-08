@@ -9,23 +9,20 @@ import { runtimeEnv } from "./runtime-env";
  */
 export const ADMIN_SESSION_COOKIE = "outbound_admin_session";
 const MINIMUM_TOKEN_LENGTH = 32;
-// A cookie has to carry some expiry, so "does not expire" is ten years.
-const PERMANENT_SESSION_DAYS = 3_650;
+const DEFAULT_SESSION_DAYS = 30;
+const MAX_SESSION_DAYS = 365;
 
 /**
- * How long a signed-in operator stays signed in. The default does not expire,
- * because operators were being signed out mid-shift for no operational gain:
- * revocation never depended on it. The allowlist is re-read on every request,
- * so removing an address from OUTBOUND_ADMIN_EMAILS ends that operator's access
- * immediately, whatever their cookie says. Set OUTBOUND_ADMIN_SESSION_DAYS to a
- * number of days to reintroduce a shorter limit.
+ * How long a signed-in operator stays signed in. Every session has an absolute
+ * expiry; the allowlist is still re-read on every request, so removing an
+ * address from OUTBOUND_ADMIN_EMAILS revokes access immediately.
  */
 export function adminSessionTtlSeconds() {
   const configured = Number(runtimeEnv("OUTBOUND_ADMIN_SESSION_DAYS"));
   const days =
     Number.isFinite(configured) && configured > 0
-      ? Math.min(configured, PERMANENT_SESSION_DAYS)
-      : PERMANENT_SESSION_DAYS;
+      ? Math.min(configured, MAX_SESSION_DAYS)
+      : DEFAULT_SESSION_DAYS;
   return Math.round(days * 24 * 60 * 60);
 }
 

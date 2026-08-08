@@ -286,7 +286,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="eyebrow">
               Outbound {data.warehouse.code}
             </span>
-            <strong>{operationDate} · snapshot operasi</strong>
+            <strong>
+              {operationDate}
+              <span className="topbar-context-detail"> · snapshot operasi</span>
+            </strong>
           </div>
           <div className="topbar-actions">
             <button
@@ -402,6 +405,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       {notice && (
         <button
+          aria-atomic="true"
+          aria-live="polite"
           className={`workspace-toast toast-${notice.tone}`}
           onClick={clearNotice}
           type="button"

@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   aggregateMetrics,
+  buildDestinationRuleIndex,
   buildBulkUploadRows,
+  extractDestinationCode,
   summarizeZones,
 } from "@/lib/outbound-logic";
 import {
+  getDestinationRoutes,
+  getDestinationRoutesVersion,
   getDatasetSnapshotMetadata,
   loadDatasetSnapshot,
 } from "@/lib/runtime-storage";
+import { buildCheckerRoutes } from "@/lib/superset-sync";
 import {
   anonymousReadEnabled,
   authRequiredMessage,
@@ -31,9 +36,12 @@ export async function GET(request: NextRequest) {
   const resource =
     request.nextUrl.searchParams.get("resource")?.trim().toLowerCase() ??
     "dataset";
-  const metadata = await getDatasetSnapshotMetadata();
-  const etag = metadata?.syncedAt
-    ? `"snapshot-${metadata.syncedAt}"`
+  const [metadata, routingVersion] = await Promise.all([
+    getDatasetSnapshotMetadata(),
+    getDestinationRoutesVersion(),
+  ]);
+  const etag = metadata?.version
+    ? `"snapshot-v${metadata.version}-r${routingVersion ?? "0"}"`
     : null;
   if (etag && request.headers.get("if-none-match") === etag) {
     return new NextResponse(null, {
@@ -54,6 +62,38 @@ export async function GET(request: NextRequest) {
   }
 
   const data = snapshot.data;
+  const storedRoutes = await getDestinationRoutes();
+  if (storedRoutes.length) {
+    const routeIndex = buildDestinationRuleIndex(
+      data.sourceProfile.sourceDate,
+      storedRoutes,
+    );
+    data.destinationRules = storedRoutes;
+    data.orders = data.orders.map((order) => {
+      const resolved =
+        routeIndex.get(
+          order.destinationCode || extractDestinationCode(order.destination),
+        ) ?? null;
+      return {
+        ...order,
+        wave: resolved?.wave ?? "UNMAPPED",
+        drop: resolved?.drop ?? "UNMAPPED",
+        mappingStatus: resolved ? ("MAPPED" as const) : ("UNMAPPED" as const),
+      };
+    });
+    data.checkerRoutes = buildCheckerRoutes(
+      data.orders,
+      storedRoutes,
+      data.checkerRoutes,
+      data.sourceProfile.sourceDate,
+    );
+  } else {
+    // Older snapshots could carry the demo Route A–J set. Without durable
+    // destination mapping there is no defensible live checker route, so do not
+    // expose that legacy sample state under the "Langsung" badge.
+    data.destinationRules = [];
+    data.checkerRoutes = [];
+  }
   let payload: unknown;
   switch (resource) {
     case "dataset":
@@ -76,7 +116,7 @@ export async function GET(request: NextRequest) {
       payload = data.orders;
       break;
     case "destinationrules":
-      payload = data.destinationRules;
+      payload = storedRoutes.length ? storedRoutes : data.destinationRules;
       break;
     case "targetrules":
       payload = data.targetRules;

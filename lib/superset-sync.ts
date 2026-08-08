@@ -1,12 +1,12 @@
-import { createDemoDataset } from "./demo-data";
 import {
+  buildDestinationRuleIndex,
   deriveMpStatus,
   derivePickingZone,
   deriveShift,
   extractDestinationCode,
   extractWmsSoId,
   resolveDestinationRule,
-} from "./outbound-logic";
+} from "./outbound-logic.ts";
 import {
   getSessionCookie,
   getStoredConnector,
@@ -15,8 +15,10 @@ import {
   saveRawExport,
   saveStoredConnector,
   getDestinationRoutes,
-} from "./runtime-storage";
+  SnapshotConflictError,
+} from "./runtime-storage.ts";
 import type {
+  CheckerRoute,
   DemoDataset,
   DestinationRule,
   HourlyPoint,
@@ -28,14 +30,14 @@ import type {
   TargetRule,
   ZoneRule,
 } from "./outbound-types";
-import { runtimeEnv } from "./runtime-env";
+import { runtimeEnv } from "./runtime-env.ts";
 import {
   normalizeSupersetHeader,
   parseSupersetExport,
   recordsFromJson,
   validateSupersetRecords,
   type RawRecord,
-} from "./superset-payload";
+} from "./superset-payload.ts";
 
 type ExportResult = {
   contentType: string;
@@ -138,9 +140,9 @@ function filterMetadataFromJson(parsed: unknown) {
   }
 }
 
-function jakartaMonth(now = new Date()) {
+function monthInTimeZone(timeZone = "Asia/Jakarta", now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Jakarta",
+    timeZone,
     year: "numeric",
     month: "2-digit",
   }).formatToParts(now);
@@ -153,6 +155,10 @@ function jakartaMonth(now = new Date()) {
     from: `${year}-${month}-01`,
     to: `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`,
   };
+}
+
+function jakartaMonth(now = new Date()) {
+  return monthInTimeZone("Asia/Jakarta", now);
 }
 
 function validateBaseUrl(value: string) {
@@ -266,11 +272,12 @@ async function fetchExport(
   }
   // The ceiling protects the runtime, which holds the raw text, the parsed
   // structure, and the records at the same time. It is configurable because the
-  // safe value depends on where this runs, and a fixed 45 MB blocks a warehouse
-  // whose month simply is larger.
+  // safe value depends on where this runs. CSV is the default because a Worker
+  // otherwise holds repeated JSON keys, the parsed structure, and normalized
+  // records within the same 128 MB isolate.
   const limitMb = Math.min(
-    500,
-    Math.max(1, Number(runtimeEnv("SUPERSET_EXPORT_MAX_MB")) || 120),
+    120,
+    Math.max(1, Number(runtimeEnv("SUPERSET_EXPORT_MAX_MB")) || 45),
   );
   if (body.length > limitMb * 1_000_000) {
     const actualMb = (body.length / 1_000_000).toFixed(1);
@@ -297,6 +304,7 @@ async function fetchExport(
   } else {
     records = parseSupersetExport(body, contentType);
   }
+  body = "";
   if (!records.length) {
     throw new Error(`Slice ${sliceId} tidak mengembalikan baris data.`);
   }
@@ -338,6 +346,32 @@ function normalizeStatus(raw: string): OrderStatus {
   return raw.trim().toUpperCase() || "UNKNOWN";
 }
 
+function numericValue(row: RawRecord) {
+  return Math.max(
+    0,
+    Number(
+      value(
+        row,
+        "SUM(request_quantity)",
+        "sum(request_quantity)",
+        "request_quantity",
+        "request_qty",
+        "quantity",
+      ).replaceAll(",", ""),
+    ) || 0,
+  );
+}
+
+function booleanValue(raw: string) {
+  return ["true", "1", "yes", "y", "active", "aktif"].includes(
+    raw.trim().toLowerCase(),
+  );
+}
+
+function listValue(raw: string) {
+  return [...new Set(raw.split(/[,;|]/).map((item) => item.trim().toUpperCase()).filter(Boolean))];
+}
+
 function buildOrders(
   records: RawRecord[],
   month: string,
@@ -372,20 +406,11 @@ function buildOrders(
     const soNumber = value(row, "so_number");
     if (!soNumber) return;
     const rack = value(row, "origin_rack_name");
-    const zone = derivePickingZone(rack);
+    const zone =
+      value(row, "picking_zone", "zone").trim().toUpperCase() ||
+      derivePickingZone(rack);
     const key = `${soNumber}::${zone}`;
-    const quantity = Math.max(
-      0,
-      Number(
-        value(
-          row,
-          "SUM(request_quantity)",
-          "sum(request_quantity)",
-          "request_quantity",
-          "request_qty",
-        ).replaceAll(",", ""),
-      ) || 0,
-    );
+    const quantity = numericValue(row);
     const endAt = value(row, "picking_end_at");
     const pickerId = value(row, "picking_staff_id");
     const group = groups.get(key) ?? {
@@ -421,7 +446,7 @@ function buildOrders(
       currentSku.lineCount += 1;
       group.skuDetails.set(sku, currentSku);
     }
-    const remark = value(row, "remarks");
+    const remark = value(row, "remarks", "remark");
     if (remark) group.remarks.add(remark);
     if (pickerId) group.pickerIds.add(pickerId);
     group.lineCount += 1;
@@ -437,20 +462,28 @@ function buildOrders(
       "created_at",
       "so_date",
     );
-    const destination = value(row, "destination_location_name", "destination");
+    const destination = value(
+      row,
+      "destination_location_name",
+      "destination_name",
+      "destination",
+    );
+    const destinationCode =
+      value(row, "destination_id", "destination_code").trim().toUpperCase() ||
+      extractDestinationCode(destination);
     const zone = id.split("::").at(-1) ?? "UNMAPPED";
-    const rule = resolveDestinationRule(destination, soDate, rules);
+    const rule = resolveDestinationRule(destinationCode, soDate, rules);
     const racks = [...group.racks].sort();
     const levels = racks
       .map((rack) => rack.match(/-(L\d+)-/i)?.[1]?.toUpperCase())
       .filter((item): item is string => Boolean(item));
-    const status = normalizeStatus(value(row, "status"));
+    const status = normalizeStatus(value(row, "status", "so_status"));
     return {
       id,
       soNumber: value(row, "so_number"),
       wmsSoId: extractWmsSoId(value(row, "so_number")),
       destination,
-      destinationCode: extractDestinationCode(destination),
+      destinationCode,
       zone,
       pickingAreaNames: [...group.areas].sort(),
       originRackNames: racks,
@@ -518,7 +551,9 @@ function buildPickers(
 
   return [...latestByStaff.values()]
     .filter(
-      (row) => value(row, "schedule_role").trim() === "OUTBOUND_PICKER_STAFF",
+      (row) =>
+        value(row, "schedule_role").trim().toUpperCase() ===
+        "OUTBOUND_PICKER_STAFF",
     )
     .map((row) => {
       const id = value(row, "staff_id");
@@ -526,8 +561,11 @@ function buildPickers(
       const joinDate = datePart(value(row, "drivers_join_date"));
       const scheduleStartTime = value(row, "schedule_start_time");
       const role = value(row, "schedule_role");
-      const checkedIn = Boolean(value(row, "checkin_time"));
-      const isActive = value(row, "is_active").toLowerCase() === "true";
+      const checkedIn = Boolean(
+        value(row, "checkin_time", "attendance_check_in"),
+      );
+      const isActive = booleanValue(value(row, "is_active", "active"));
+      const sourceZones = listValue(value(row, "zone", "picking_zone"));
       const mpStatus = deriveMpStatus(joinDate, operationDate);
       const work = assigned.get(id);
       return {
@@ -550,12 +588,14 @@ function buildPickers(
         shift: deriveShift(scheduleStartTime),
         checkedIn,
         isActive,
-        zones: prior?.zones ?? [],
+        zones: sourceZones.length ? sourceZones : (prior?.zones ?? []),
         waves: prior?.waves ?? [],
         targetQty: targetForStatus(mpStatus, targetRules),
         targetOverride: prior?.targetOverride ?? null,
         targetPerHour: Math.round(targetForStatus(mpStatus, targetRules) / 8),
-        activeHours: checkedIn ? 1 : 0,
+        // Filled from distinct completion-hour buckets after the productivity
+        // series is built. Check-in alone is not evidence of one worked hour.
+        activeHours: 0,
         assignedQty: work?.qty ?? 0,
         pickedQty: work?.picked ?? 0,
         totalSo: work?.so.size ?? 0,
@@ -572,15 +612,7 @@ function buildHourly(records: RawRecord[], month: string): HourlyPoint[] {
     if (!soDate.startsWith(month)) return;
     const created = value(row, "supply_order_created_at");
     const createdHour = created.slice(11, 13);
-    const quantity =
-      Number(
-        value(
-          row,
-          "SUM(request_quantity)",
-          "sum(request_quantity)",
-          "request_quantity",
-        ).replaceAll(",", ""),
-      ) || 0;
+    const quantity = numericValue(row);
     if (createdHour) {
       const point = byHour.get(createdHour) ?? {
         hour: createdHour,
@@ -646,18 +678,7 @@ function buildPickerProductivity(
       so: new Set<string>(),
       sku: new Set<string>(),
     };
-    bucket.pickedQty += Math.max(
-      0,
-      Number(
-        value(
-          row,
-          "SUM(request_quantity)",
-          "sum(request_quantity)",
-          "request_quantity",
-          "request_qty",
-        ).replaceAll(",", ""),
-      ) || 0,
-    );
+    bucket.pickedQty += numericValue(row);
     const soNumber = value(row, "so_number");
     const skuNumber = value(row, "sku_number", "product_id");
     if (soNumber) bucket.so.add(soNumber);
@@ -704,6 +725,85 @@ function deriveZoneRules(orders: SupplyOrder[]): ZoneRule[] {
     .sort((a, b) => a.zone.localeCompare(b.zone));
 }
 
+function buildCheckerRoutes(
+  orders: SupplyOrder[],
+  rules: DestinationRule[],
+  previous: CheckerRoute[],
+  operationDate: string,
+): CheckerRoute[] {
+  const ruleIndex = buildDestinationRuleIndex(operationDate, rules);
+  const previousById = new Map(previous.map((route) => [route.id, route]));
+  const groups = new Map<
+    string,
+    {
+      id: string;
+      wave: string;
+      sequence: number;
+      codes: Map<string, string>;
+      orders: SupplyOrder[];
+    }
+  >();
+
+  orders.forEach((order) => {
+    const rule = ruleIndex.get(order.destinationCode.toUpperCase());
+    if (!rule) return;
+    const waveKey = rule.wave.toUpperCase().replace(/[^A-Z0-9]+/g, "-");
+    const id = `CHK-${operationDate.slice(0, 7)}-${String(rule.sequence).padStart(2, "0")}-${waveKey}`;
+    const group = groups.get(id) ?? {
+      id,
+      wave: rule.wave,
+      sequence: rule.sequence,
+      codes: new Map<string, string>(),
+      orders: [],
+    };
+    group.codes.set(order.destinationCode, rule.drop);
+    group.orders.push(order);
+    groups.set(id, group);
+  });
+
+  return [...groups.values()]
+    .map((group) => {
+      const prior = previousById.get(group.id);
+      const requestQty = group.orders.reduce(
+        (sum, order) => sum + order.requestQty,
+        0,
+      );
+      const pickedQty = group.orders.reduce(
+        (sum, order) => sum + order.pickedQty,
+        0,
+      );
+      const quantity = Math.max(0, requestQty - pickedQty);
+      const status = prior?.status ??
+        (quantity === 0
+          ? ("DONE" as const)
+          : pickedQty > 0
+            ? ("IN PROGRESS" as const)
+            : ("WAITING" as const));
+      const codes = [...group.codes.entries()]
+        .sort(
+          (a, b) =>
+            a[1].localeCompare(b[1], "id", { numeric: true }) ||
+            a[0].localeCompare(b[0], "id"),
+        )
+        .map(([code]) => code);
+      return {
+        id: group.id,
+        route: codes.join(" - ") || `Route ${group.sequence}`,
+        wave: group.wave,
+        quantity,
+        deadline:
+          group.orders.map((order) => order.deadline).sort()[0] ?? "14:00",
+        status,
+        worker: prior?.worker ?? null,
+        updatedAt:
+          prior?.updatedAt ??
+          group.orders.map((order) => order.updatedAt).sort().at(-1) ??
+          "-",
+      } satisfies CheckerRoute;
+    })
+    .sort((a, b) => a.id.localeCompare(b.id, "id", { numeric: true }));
+}
+
 function buildDataset(
   soRecords: RawRecord[],
   staffRecords: RawRecord[],
@@ -717,7 +817,6 @@ function buildDataset(
   warehouse?: DemoDataset["warehouse"],
   storedRoutes?: DestinationRule[],
 ): DemoDataset {
-  const fallback = createDemoDataset();
   const sourceDate = maxDate(
     [
       ...soRecords.map(supplyOrderDate),
@@ -733,7 +832,7 @@ function buildDataset(
     : (previous?.destinationRules ?? []);
   const targetRules = previous?.targetRules ?? DEFAULT_TARGETS;
   const orders = buildOrders(soRecords, month, destinationRules);
-  const pickers = buildPickers(
+  const basePickers = buildPickers(
     staffRecords,
     month,
     sourceDate,
@@ -741,6 +840,22 @@ function buildDataset(
     targetRules,
     previous?.pickers ?? [],
   );
+  const pickerProductivity = buildPickerProductivity(
+    soRecords,
+    month,
+    basePickers,
+  );
+  const productiveHoursByPicker = new Map<string, number>();
+  pickerProductivity.forEach((point) =>
+    productiveHoursByPicker.set(
+      point.pickerId,
+      (productiveHoursByPicker.get(point.pickerId) ?? 0) + 1,
+    ),
+  );
+  const pickers = basePickers.map((picker) => ({
+    ...picker,
+    activeHours: productiveHoursByPicker.get(picker.id) ?? 0,
+  }));
   const distinctSo = new Set(orders.map((order) => order.soNumber)).size;
   const bySo = new Map<string, number>();
   orders.forEach((order) =>
@@ -755,7 +870,7 @@ function buildDataset(
     (row) => !value(row, "schedule_start_time"),
   ).length;
   const missingCheckIn = pickerSourceRows.filter(
-    (row) => !value(row, "checkin_time"),
+    (row) => !value(row, "checkin_time", "attendance_check_in"),
   ).length;
   const completedLineQty = soRecords
     .filter(
@@ -766,14 +881,7 @@ function buildDataset(
     .reduce(
       (sum, row) =>
         sum +
-        (Number(
-          value(
-            row,
-            "SUM(request_quantity)",
-            "sum(request_quantity)",
-            "request_quantity",
-          ).replaceAll(",", ""),
-        ) || 0),
+        numericValue(row),
       0,
     );
 
@@ -790,7 +898,12 @@ function buildDataset(
     destinationRules,
     zoneRules: deriveZoneRules(orders),
     targetRules,
-    checkerRoutes: previous?.checkerRoutes ?? fallback.checkerRoutes,
+    checkerRoutes: buildCheckerRoutes(
+      orders,
+      destinationRules,
+      previous?.checkerRoutes ?? [],
+      sourceDate,
+    ),
     audit: [
       {
         id: `SYNC-${Date.now()}`,
@@ -807,7 +920,7 @@ function buildDataset(
       ...(previous?.audit ?? []),
     ].slice(0, 40),
     hourly: buildHourly(soRecords, month),
-    pickerProductivity: buildPickerProductivity(soRecords, month, pickers),
+    pickerProductivity,
     sourceProfile: {
       sourceDate,
       soRows: soRecords.filter((row) => supplyOrderDate(row).startsWith(month))
@@ -818,14 +931,14 @@ function buildDataset(
       newRows: soRecords.filter(
         (row) =>
           supplyOrderDate(row).startsWith(month) &&
-          normalizeStatus(value(row, "status")) === "NEW",
+          normalizeStatus(value(row, "status", "so_status")) === "NEW",
       ).length,
       newSo: new Set(
         soRecords
           .filter(
             (row) =>
               supplyOrderDate(row).startsWith(month) &&
-              normalizeStatus(value(row, "status")) === "NEW",
+              normalizeStatus(value(row, "status", "so_status")) === "NEW",
           )
           .map((row) => value(row, "so_number")),
       ).size,
@@ -842,14 +955,14 @@ function buildDataset(
         pickerSourceRows
           .filter(
             (row) =>
-              value(row, "is_active").toLowerCase() === "true" &&
-              Boolean(value(row, "checkin_time")) &&
+              booleanValue(value(row, "is_active", "active")) &&
+              Boolean(value(row, "checkin_time", "attendance_check_in")) &&
               Boolean(value(row, "schedule_start_time")),
           )
           .map((row) => value(row, "staff_id")),
       ).size,
       checkedInRows: pickerSourceRows.filter((row) =>
-        Boolean(value(row, "checkin_time")),
+        Boolean(value(row, "checkin_time", "attendance_check_in")),
       ).length,
       completedLineQty,
       dateRange: { from: `${month}-01`, to: sourceDate },
@@ -891,26 +1004,27 @@ export async function syncFromSuperset(
   if (!cookie) {
     throw new Error("Cookie Superset belum tersedia.");
   }
-  const month = jakartaMonth();
-  const [soExport, staffExport, previous] = await Promise.all([
-    fetchExport(
-      connector.baseUrl,
-      connector.pathTemplate,
-      connector.soSliceId,
-      cookie,
-      month,
-      "so",
-    ),
-    fetchExport(
-      connector.baseUrl,
-      connector.pathTemplate,
-      connector.staffSliceId,
-      cookie,
-      month,
-      "staff",
-    ),
-    loadDatasetSnapshot(),
-  ]);
+  const month = monthInTimeZone(connector.warehouseTimezone);
+  const storedRoutesPromise = getDestinationRoutes();
+  // Download sequentially so two raw exports and their parsed structures are
+  // never resident at the same time inside the Worker isolate.
+  const soExport = await fetchExport(
+    connector.baseUrl,
+    connector.pathTemplate,
+    connector.soSliceId,
+    cookie,
+    month,
+    "so",
+  );
+  const staffExport = await fetchExport(
+    connector.baseUrl,
+    connector.pathTemplate,
+    connector.staffSliceId,
+    cookie,
+    month,
+    "staff",
+  );
+  const storedRoutes = await storedRoutesPromise;
   const soValidation = validateSupersetRecords(
     soExport.records,
     "so",
@@ -923,44 +1037,52 @@ export async function syncFromSuperset(
     month.key,
     connector.staffSliceId,
   );
-  const dataset = buildDataset(
-    soExport.records,
-    staffExport.records,
-    month.key,
-    previous?.data ?? null,
-    {
-      so: soExport.appliedFilters,
-      staff: staffExport.appliedFilters,
-      rejected: [
-        ...soExport.rejectedFilters.map((filter) => `SO: ${filter}`),
-        ...staffExport.rejectedFilters.map((filter) => `Staff: ${filter}`),
-      ],
-    },
-    {
-      code: connector.warehouseCode,
-      name: connector.warehouseName,
-      timezone: connector.warehouseTimezone,
-    },
-    await getDestinationRoutes(),
-  );
-  if (
-    dataset.orders.length === 0 ||
-    dataset.sourceProfile.soRows !== soValidation.currentMonthRows ||
-    dataset.sourceProfile.staffRows !== staffValidation.currentMonthRows
-  ) {
-    throw new Error(
-      "Transformasi snapshot tidak konsisten dengan payload Superset. Snapshot lama dipertahankan; periksa struktur chart sebelum mencoba lagi.",
-    );
-  }
   const syncedAt = new Date().toISOString();
-  await Promise.all([
-  ]);
-  const datasetKey = await saveDatasetSnapshot(
-    dataset,
-    runId,
-    month.key,
-    syncedAt,
-  );
+  let dataset: DemoDataset | null = null;
+  let saved: Awaited<ReturnType<typeof saveDatasetSnapshot>> | null = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const previous = await loadDatasetSnapshot();
+    dataset = buildDataset(
+      soExport.records,
+      staffExport.records,
+      month.key,
+      previous?.data ?? null,
+      {
+        so: soExport.appliedFilters,
+        staff: staffExport.appliedFilters,
+        rejected: [
+          ...soExport.rejectedFilters.map((filter) => `SO: ${filter}`),
+          ...staffExport.rejectedFilters.map((filter) => `Staff: ${filter}`),
+        ],
+      },
+      {
+        code: connector.warehouseCode,
+        name: connector.warehouseName,
+        timezone: connector.warehouseTimezone,
+      },
+      storedRoutes,
+    );
+    if (
+      dataset.orders.length === 0 ||
+      dataset.sourceProfile.soRows !== soValidation.currentMonthRows ||
+      dataset.sourceProfile.staffRows !== staffValidation.currentMonthRows
+    ) {
+      throw new Error(
+        "Transformasi snapshot tidak konsisten dengan payload Superset. Snapshot lama dipertahankan; periksa struktur chart sebelum mencoba lagi.",
+      );
+    }
+    try {
+      saved = await saveDatasetSnapshot(dataset, runId, month.key, syncedAt, {
+        expectedVersion: previous?.version ?? null,
+        sourceSyncedAt: syncedAt,
+      });
+      break;
+    } catch (caught) {
+      if (!(caught instanceof SnapshotConflictError) || attempt === 1) throw caught;
+    }
+  }
+  if (!dataset || !saved) throw new SnapshotConflictError();
+  const datasetKey = saved.datasetKey;
   await saveStoredConnector({
     ...connector,
     health: "CONNECTED",
@@ -979,4 +1101,9 @@ export async function syncFromSuperset(
   };
 }
 
-export { buildDataset as buildDatasetFromRecords, jakartaMonth };
+export {
+  buildCheckerRoutes,
+  buildDataset as buildDatasetFromRecords,
+  jakartaMonth,
+  monthInTimeZone,
+};

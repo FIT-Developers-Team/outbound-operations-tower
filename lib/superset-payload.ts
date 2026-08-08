@@ -10,6 +10,7 @@ const REQUIRED_COLUMNS: Record<SupersetResource, string[][]> = {
       "sum(request_quantity)",
       "request_quantity",
       "request_qty",
+      "quantity",
     ],
   ],
   staff: [

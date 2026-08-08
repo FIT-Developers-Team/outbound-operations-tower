@@ -100,7 +100,8 @@ function withDestinationRules(
     destinationRules: rules,
     orders: dataset.orders.map((order) => {
       const resolved =
-        index.get(extractDestinationCode(order.destination)) ?? null;
+        index.get(order.destinationCode || extractDestinationCode(order.destination)) ??
+        null;
       return {
         ...order,
         wave: resolved?.wave ?? "UNMAPPED",
@@ -418,6 +419,9 @@ export function OutboundProvider({ children }: { children: ReactNode }) {
           pickerId: proposal.pickerId,
           soNumber: proposal.soNumber,
           zone: proposal.zone,
+          allowOverride:
+            proposal.mode === "MANUAL" && Boolean(proposal.operatorNote),
+          operatorNote: proposal.operatorNote,
         })),
       });
       return;

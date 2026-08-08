@@ -2608,12 +2608,23 @@ textarea.input {
 }
 
 .empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
   margin: 0;
   padding: 24px;
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   color: var(--text-muted);
   text-align: center;
+}
+
+.empty-state strong {
+  color: var(--text);
+}
+
+.table-empty-cell {
+  padding: 16px !important;
 }
 
 .shift-productivity {
@@ -2793,11 +2804,15 @@ textarea.input {
     left: 0;
     width: min(280px, 86vw);
     box-shadow: var(--shadow);
+    pointer-events: none;
     transform: translateX(-105%);
+    visibility: hidden;
   }
 
   .sidebar.mobile-open {
+    pointer-events: auto;
     transform: translateX(0);
+    visibility: visible;
   }
 
   .sidebar.rail {
@@ -2859,8 +2874,13 @@ textarea.input {
 
 @media (max-width: 680px) {
   .topbar {
+    gap: 8px;
     min-height: 62px;
     padding: 9px 12px;
+  }
+
+  .topbar-actions {
+    gap: 6px;
   }
 
   .topbar-context .eyebrow,
@@ -2871,6 +2891,17 @@ textarea.input {
 
   .topbar-context strong {
     font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .topbar-context-detail {
+    display: none;
+  }
+
+  .metric-sub {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
   }
 
   .sync-now {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   useMemo,
   useState,
@@ -521,6 +522,28 @@ export function PlanningView({
   const bulkRows = buildBulkUploadRows(data.orders, proposals);
   const readyRows = bulkRows.filter((row) => row.ready);
   const blockedRows = bulkRows.filter((row) => !row.ready);
+  const readyNewCount = data.orders.filter(
+    (order) =>
+      order.pickerId === null &&
+      order.status === "NEW" &&
+      order.mappingStatus === "MAPPED",
+  ).length;
+  const unmappedNewCount = data.orders.filter(
+    (order) =>
+      order.pickerId === null &&
+      order.status === "NEW" &&
+      order.mappingStatus === "UNMAPPED",
+  ).length;
+  const hasActiveFilters = Boolean(
+    query.trim() ||
+      shifts.length ||
+      scheduleDescriptions.length ||
+      mpStatuses.length ||
+      zonesSelected.length ||
+      waves.length ||
+      drops.length ||
+      remarks.length,
+  );
 
   function toggle(id: string) {
     const next = new Set(selected);
@@ -566,6 +589,7 @@ export function PlanningView({
             </button>
             <button
               className="btn btn-primary"
+              disabled={!eligible.length}
               onClick={() => onOptimize(filter)}
               type="button"
             >
@@ -609,8 +633,8 @@ export function PlanningView({
       <Section
         eyebrow={`${eligible.length} kandidat SO × zona`}
         title="Daftar SO siap assign"
-        action={
-          <button className="btn btn-sm" onClick={toggleAll} type="button">
+          action={
+          <button className="btn btn-sm" disabled={!visibleEligible.length} onClick={toggleAll} type="button">
             Pilih halaman
           </button>
         }
@@ -630,6 +654,36 @@ export function PlanningView({
               </tr>
             </thead>
             <tbody>
+              {!visibleEligible.length && (
+                <tr>
+                  <td className="table-empty-cell" colSpan={8}>
+                    <div className="empty-state">
+                      {readyNewCount > 0 && hasActiveFilters ? (
+                        <>
+                          <strong>Tidak ada kandidat yang cocok dengan filter.</strong>
+                          <span>Bersihkan filter untuk menampilkan kembali {readyNewCount} SO-zona yang siap.</span>
+                          <button className="btn btn-sm" onClick={clearFilters} type="button">
+                            Bersihkan filter
+                          </button>
+                        </>
+                      ) : unmappedNewCount > 0 ? (
+                        <>
+                          <strong>{unmappedNewCount} SO-zona belum memiliki mapping tujuan.</strong>
+                          <span>Lengkapi wave, drop, dan urutan tujuan sebelum membuat rekomendasi picker.</span>
+                          <Link className="btn btn-sm btn-primary" href="/settings">
+                            Buka konfigurasi routing
+                          </Link>
+                        </>
+                      ) : (
+                        <>
+                          <strong>Belum ada SO baru yang siap di-assign.</strong>
+                          <span>Sinkronkan sumber data atau periksa kembali status SO.</span>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
               {visibleEligible.map((order) => {
                 const proposal = proposalByOrder.get(order.id);
                 return (
@@ -824,4 +878,3 @@ export function PlanningView({
     </>
   );
 }
-

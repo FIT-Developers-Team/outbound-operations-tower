@@ -11,6 +11,11 @@ import {
   getOutboundAccess,
   isSameOrigin,
 } from "@/lib/request-auth";
+import {
+  checkSignInThrottle,
+  clearSignInFailures,
+  recordSignInFailure,
+} from "@/lib/runtime-storage";
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
@@ -31,6 +36,24 @@ function rejectCrossOrigin(request: NextRequest) {
   return isSameOrigin(request)
     ? null
     : error(403, "CROSS_ORIGIN_BLOCKED", "Origin tidak diizinkan.");
+}
+
+async function throttleKeys(request: NextRequest, email: string) {
+  const address =
+    request.headers.get("cf-connecting-ip")?.trim() ||
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "unknown";
+  return Promise.all(
+    [`email:${email}`, `address:${address.slice(0, 96)}`].map(async (value) => {
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(`outbound-sign-in:${value}`),
+      );
+      return [...new Uint8Array(digest)]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    }),
+  );
 }
 
 export async function GET(request: NextRequest) {
@@ -75,6 +98,21 @@ export async function POST(request: NextRequest) {
 
   const email = String(body.email ?? "").trim().toLowerCase();
   const token = String(body.token ?? "");
+  const attemptKeys = await throttleKeys(request, email);
+  const throttle = await checkSignInThrottle(attemptKeys);
+  if (!throttle.allowed) {
+    return NextResponse.json(
+      {
+        ok: false,
+        errorCode: "SIGNIN_RATE_LIMITED",
+        message: "Terlalu banyak percobaan masuk. Coba lagi beberapa menit lagi.",
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(throttle.retryAfterSeconds) },
+      },
+    );
+  }
 
   // A wrong address and a wrong token return the same answer so the response
   // cannot be used to enumerate which operators are admins.
@@ -83,6 +121,7 @@ export async function POST(request: NextRequest) {
     adminEmails().includes(email),
   ];
   if (!tokenValid || !emailAllowed) {
+    await recordSignInFailure(attemptKeys);
     return error(
       401,
       "SIGNIN_REJECTED",
@@ -90,6 +129,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  await clearSignInFailures(attemptKeys);
   const response = NextResponse.json({ ok: true, email });
   response.cookies.set({
     name: ADMIN_SESSION_COOKIE,

@@ -4,7 +4,7 @@ import type {
   DestinationRule,
   SyncHealth,
 } from "./outbound-types";
-import { runtimeEnv } from "./runtime-env";
+import { runtimeEnv } from "./runtime-env.ts";
 
 type RuntimeBindings = {
   DB?: D1Database;
@@ -35,6 +35,12 @@ const COOKIE_SECRET_NAME = "superset_cookie_encryption_key";
 const MINIMUM_SECRET_LENGTH = 32;
 let schemaReady: Promise<boolean> | null = null;
 let generatedSecretCache: string | null = null;
+const SIGN_IN_WINDOW_MS = 15 * 60_000;
+const SIGN_IN_MAX_FAILURES = 8;
+const memorySignInAttempts = new Map<
+  string,
+  { failures: number; windowStart: number; blockedUntil: number }
+>();
 
 /**
  * CSV names each column once instead of repeating it on every row, which for a
@@ -44,9 +50,9 @@ let generatedSecretCache: string | null = null;
 function normalizeExportPath(pathTemplate: string | null | undefined) {
   const path = pathTemplate?.trim();
   const preferred =
-    runtimeEnv("SUPERSET_EXPORT_FORMAT")?.trim().toLowerCase() === "csv"
-      ? LEGACY_CSV_PATH
-      : DEFAULT_PATH;
+    runtimeEnv("SUPERSET_EXPORT_FORMAT")?.trim().toLowerCase() === "json"
+      ? DEFAULT_PATH
+      : LEGACY_CSV_PATH;
   if (!path || path === LEGACY_CSV_PATH || path === DEFAULT_PATH) {
     return preferred;
   }
@@ -83,14 +89,34 @@ type RunRow = {
 type SnapshotRow = {
   dataset_key: string;
   fallback_payload: string | null;
+  source_synced_at: string | null;
   synced_at: string;
+  run_id: string;
+  version: number;
 };
 
 export type SnapshotMetadata = {
   datasetKey: string;
   fallbackPayload: string | null;
+  sourceSyncedAt: string;
   syncedAt: string;
+  runId: string;
+  version: number;
 };
+
+type CommandReceiptRow = {
+  action: string;
+  actor: string;
+  status: "RUNNING" | "SUCCESS" | "ERROR";
+  message: string | null;
+};
+
+export class SnapshotConflictError extends Error {
+  constructor() {
+    super("Snapshot berubah saat command diproses. Muat ulang data lalu coba lagi.");
+    this.name = "SnapshotConflictError";
+  }
+}
 
 export type StoredConnector = {
   baseUrl: string;
@@ -149,6 +175,16 @@ export async function getDestinationRoutes(): Promise<DestinationRule[]> {
     sequence: row.sequence,
     active: row.active !== 0,
   }));
+}
+
+export async function getDestinationRoutesVersion() {
+  const env = await runtimeBindings();
+  if (!env.DB) return null;
+  await ensureRuntimeSchema();
+  const row = await env.DB.prepare(
+    "SELECT MAX(updated_at) AS updated_at FROM destination_routes",
+  ).first<{ updated_at: string | null }>();
+  return row?.updated_at ?? null;
 }
 
 export async function saveDestinationRoutes(rules: DestinationRule[]) {
@@ -283,10 +319,35 @@ async function initializeRuntimeSchema() {
         fallback_payload TEXT,
         so_rows INTEGER NOT NULL DEFAULT 0,
         staff_rows INTEGER NOT NULL DEFAULT 0,
+        source_synced_at TEXT,
         synced_at TEXT NOT NULL,
-        run_id TEXT NOT NULL
+        run_id TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1
       )
     `),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS command_receipts (
+        idempotency_key TEXT PRIMARY KEY NOT NULL,
+        action TEXT NOT NULL,
+        actor TEXT NOT NULL,
+        status TEXT NOT NULL,
+        message TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+      )
+    `),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS sign_in_attempts (
+        key TEXT PRIMARY KEY NOT NULL,
+        failures INTEGER NOT NULL DEFAULT 0,
+        window_start TEXT NOT NULL,
+        blocked_until TEXT,
+        updated_at TEXT NOT NULL
+      )
+    `),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS sign_in_attempts_updated_at_idx ON sign_in_attempts (updated_at)",
+    ),
   ]);
   const tableInfo = await db
     .prepare("PRAGMA table_info(sync_connector)")
@@ -332,7 +393,184 @@ async function initializeRuntimeSchema() {
       )
       .run();
   }
+  const snapshotInfo = await db
+    .prepare("PRAGMA table_info(dataset_snapshots)")
+    .all<{ name: string }>();
+  const snapshotColumns = new Set(
+    (snapshotInfo.results ?? []).map((column) => column.name),
+  );
+  if (!snapshotColumns.has("source_synced_at")) {
+    await db
+      .prepare("ALTER TABLE dataset_snapshots ADD COLUMN source_synced_at TEXT")
+      .run();
+    await db
+      .prepare(
+        "UPDATE dataset_snapshots SET source_synced_at = synced_at WHERE source_synced_at IS NULL",
+      )
+      .run();
+  }
+  if (!snapshotColumns.has("version")) {
+    await db
+      .prepare(
+        "ALTER TABLE dataset_snapshots ADD COLUMN version INTEGER NOT NULL DEFAULT 1",
+      )
+      .run();
+  }
   return true;
+}
+
+export async function claimCommand(
+  idempotencyKey: string,
+  action: string,
+  actor: string,
+) {
+  const env = await runtimeBindings();
+  if (!env.DB) return { acquired: true, receipt: null };
+  await ensureRuntimeSchema();
+  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60_000).toISOString();
+  await env.DB.prepare("DELETE FROM command_receipts WHERE created_at < ?1")
+    .bind(cutoff)
+    .run();
+  const result = await env.DB.prepare(
+    `INSERT OR IGNORE INTO command_receipts
+       (idempotency_key, action, actor, status, created_at)
+     VALUES (?1, ?2, ?3, 'RUNNING', ?4)`,
+  )
+    .bind(idempotencyKey, action, actor, new Date().toISOString())
+    .run();
+  if ((result.meta?.changes ?? 0) === 1) {
+    return { acquired: true, receipt: null };
+  }
+  const receipt = await env.DB.prepare(
+    `SELECT action, actor, status, message
+       FROM command_receipts WHERE idempotency_key = ?1`,
+  )
+    .bind(idempotencyKey)
+    .first<CommandReceiptRow>();
+  return { acquired: false, receipt: receipt ?? null };
+}
+
+export async function finishCommand(
+  idempotencyKey: string,
+  status: "SUCCESS" | "ERROR",
+  message: string,
+) {
+  const env = await runtimeBindings();
+  if (!env.DB) return;
+  await env.DB.prepare(
+    `UPDATE command_receipts
+        SET status = ?1, message = ?2, finished_at = ?3
+      WHERE idempotency_key = ?4`,
+  )
+    .bind(status, message, new Date().toISOString(), idempotencyKey)
+    .run();
+}
+
+export async function checkSignInThrottle(keys: string[]) {
+  const uniqueKeys = [...new Set(keys)];
+  const now = Date.now();
+  const env = await runtimeBindings();
+  let retryAfterSeconds = 0;
+
+  if (!env.DB) {
+    uniqueKeys.forEach((key) => {
+      const attempt = memorySignInAttempts.get(key);
+      if (!attempt) return;
+      if (attempt.blockedUntil > now) {
+        retryAfterSeconds = Math.max(
+          retryAfterSeconds,
+          Math.ceil((attempt.blockedUntil - now) / 1_000),
+        );
+      } else if (now - attempt.windowStart >= SIGN_IN_WINDOW_MS) {
+        memorySignInAttempts.delete(key);
+      }
+    });
+    return { allowed: retryAfterSeconds === 0, retryAfterSeconds };
+  }
+
+  await ensureRuntimeSchema();
+  for (const key of uniqueKeys) {
+    const row = await env.DB.prepare(
+      "SELECT blocked_until FROM sign_in_attempts WHERE key = ?1",
+    )
+      .bind(key)
+      .first<{ blocked_until: string | null }>();
+    const blockedUntil = row?.blocked_until
+      ? Date.parse(row.blocked_until)
+      : Number.NaN;
+    if (Number.isFinite(blockedUntil) && blockedUntil > now) {
+      retryAfterSeconds = Math.max(
+        retryAfterSeconds,
+        Math.ceil((blockedUntil - now) / 1_000),
+      );
+    }
+  }
+  return { allowed: retryAfterSeconds === 0, retryAfterSeconds };
+}
+
+export async function recordSignInFailure(keys: string[]) {
+  const uniqueKeys = [...new Set(keys)];
+  const now = Date.now();
+  const env = await runtimeBindings();
+
+  if (!env.DB) {
+    uniqueKeys.forEach((key) => {
+      const previous = memorySignInAttempts.get(key);
+      const current =
+        !previous || now - previous.windowStart >= SIGN_IN_WINDOW_MS
+          ? { failures: 1, windowStart: now, blockedUntil: 0 }
+          : { ...previous, failures: previous.failures + 1 };
+      if (current.failures >= SIGN_IN_MAX_FAILURES) {
+        current.blockedUntil = now + SIGN_IN_WINDOW_MS;
+      }
+      memorySignInAttempts.set(key, current);
+    });
+    return;
+  }
+
+  await ensureRuntimeSchema();
+  const nowIso = new Date(now).toISOString();
+  const cutoffIso = new Date(now - SIGN_IN_WINDOW_MS).toISOString();
+  const blockedUntilIso = new Date(now + SIGN_IN_WINDOW_MS).toISOString();
+  await env.DB.batch(
+    uniqueKeys.map((key) =>
+      env.DB!.prepare(`
+        INSERT INTO sign_in_attempts
+          (key, failures, window_start, blocked_until, updated_at)
+        VALUES (?1, 1, ?2, NULL, ?2)
+        ON CONFLICT(key) DO UPDATE SET
+          failures = CASE
+            WHEN sign_in_attempts.window_start < ?3 THEN 1
+            ELSE sign_in_attempts.failures + 1
+          END,
+          window_start = CASE
+            WHEN sign_in_attempts.window_start < ?3 THEN ?2
+            ELSE sign_in_attempts.window_start
+          END,
+          blocked_until = CASE
+            WHEN sign_in_attempts.window_start < ?3 THEN NULL
+            WHEN sign_in_attempts.failures + 1 >= ${SIGN_IN_MAX_FAILURES} THEN ?4
+            ELSE sign_in_attempts.blocked_until
+          END,
+          updated_at = ?2
+      `).bind(key, nowIso, cutoffIso, blockedUntilIso),
+    ),
+  );
+}
+
+export async function clearSignInFailures(keys: string[]) {
+  const uniqueKeys = [...new Set(keys)];
+  const env = await runtimeBindings();
+  if (!env.DB) {
+    uniqueKeys.forEach((key) => memorySignInAttempts.delete(key));
+    return;
+  }
+  await ensureRuntimeSchema();
+  await env.DB.batch(
+    uniqueKeys.map((key) =>
+      env.DB!.prepare("DELETE FROM sign_in_attempts WHERE key = ?1").bind(key),
+    ),
+  );
 }
 
 export async function getStoredConnector(): Promise<StoredConnector> {
@@ -744,11 +982,19 @@ export async function saveDatasetSnapshot(
   runId: string,
   month: string,
   syncedAt: string,
+  options: {
+    expectedVersion?: number | null;
+    sourceSyncedAt?: string;
+  } = {},
 ) {
   const env = await runtimeBindings();
   const payload = JSON.stringify(dataset);
+  const sourceSyncedAt = options.sourceSyncedAt ?? syncedAt;
+  const datasetKey = env.DB
+    ? `snapshots/${encodeURIComponent(runId)}.json`
+    : SNAPSHOT_KEY;
   if (env.SNAPSHOTS) {
-    await env.SNAPSHOTS.put(SNAPSHOT_KEY, payload, {
+    await env.SNAPSHOTS.put(datasetKey, payload, {
       httpMetadata: { contentType: "application/json" },
       customMetadata: { runId, month, syncedAt },
     });
@@ -756,35 +1002,77 @@ export async function saveDatasetSnapshot(
   if (env.DB) {
     await ensureRuntimeSchema();
     const fallbackPayload = payload.length <= 1_500_000 ? payload : null;
-    await env.DB.prepare(`
-      INSERT INTO dataset_snapshots (
-        id, source_date, month, dataset_key, fallback_payload,
-        so_rows, staff_rows, synced_at, run_id
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-      ON CONFLICT(id) DO UPDATE SET
-        source_date = excluded.source_date,
-        month = excluded.month,
-        dataset_key = excluded.dataset_key,
-        fallback_payload = excluded.fallback_payload,
-        so_rows = excluded.so_rows,
-        staff_rows = excluded.staff_rows,
-        synced_at = excluded.synced_at,
-        run_id = excluded.run_id
-    `)
-      .bind(
-        SNAPSHOT_ID,
-        dataset.sourceProfile.sourceDate,
-        month,
-        SNAPSHOT_KEY,
-        fallbackPayload,
-        dataset.sourceProfile.soRows,
-        dataset.sourceProfile.staffRows,
-        syncedAt,
-        runId,
-      )
-      .run();
+    const previous = await getDatasetSnapshotMetadata();
+    let result: D1Result;
+    if (!previous && options.expectedVersion == null) {
+      result = await env.DB.prepare(`
+        INSERT OR IGNORE INTO dataset_snapshots (
+          id, source_date, month, dataset_key, fallback_payload,
+          so_rows, staff_rows, source_synced_at, synced_at, run_id, version
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
+      `)
+        .bind(
+          SNAPSHOT_ID,
+          dataset.sourceProfile.sourceDate,
+          month,
+          datasetKey,
+          fallbackPayload,
+          dataset.sourceProfile.soRows,
+          dataset.sourceProfile.staffRows,
+          sourceSyncedAt,
+          syncedAt,
+          runId,
+        )
+        .run();
+    } else {
+      const expectedVersion = options.expectedVersion ?? previous?.version;
+      if (!expectedVersion) throw new SnapshotConflictError();
+      result = await env.DB.prepare(`
+        UPDATE dataset_snapshots
+           SET source_date = ?1, month = ?2, dataset_key = ?3,
+               fallback_payload = ?4, so_rows = ?5, staff_rows = ?6,
+               source_synced_at = ?7, synced_at = ?8, run_id = ?9,
+               version = version + 1
+         WHERE id = ?10 AND version = ?11
+      `)
+        .bind(
+          dataset.sourceProfile.sourceDate,
+          month,
+          datasetKey,
+          fallbackPayload,
+          dataset.sourceProfile.soRows,
+          dataset.sourceProfile.staffRows,
+          sourceSyncedAt,
+          syncedAt,
+          runId,
+          SNAPSHOT_ID,
+          expectedVersion,
+        )
+        .run();
+    }
+    if ((result.meta?.changes ?? 0) !== 1) {
+      if (env.SNAPSHOTS && datasetKey !== SNAPSHOT_KEY) {
+        await env.SNAPSHOTS.delete(datasetKey).catch(() => undefined);
+      }
+      throw new SnapshotConflictError();
+    }
+    if (
+      env.SNAPSHOTS &&
+      previous?.datasetKey &&
+      previous.datasetKey !== SNAPSHOT_KEY &&
+      previous.datasetKey !== datasetKey
+    ) {
+      await env.SNAPSHOTS.delete(previous.datasetKey).catch(() => undefined);
+    }
   }
-  return SNAPSHOT_KEY;
+  return {
+    datasetKey,
+    fallbackPayload: payload.length <= 1_500_000 ? payload : null,
+    sourceSyncedAt,
+    syncedAt,
+    runId,
+    version: (options.expectedVersion ?? 0) + 1,
+  } satisfies SnapshotMetadata;
 }
 
 export async function getDatasetSnapshotMetadata(): Promise<SnapshotMetadata | null> {
@@ -792,7 +1080,9 @@ export async function getDatasetSnapshotMetadata(): Promise<SnapshotMetadata | n
   if (!env.DB) return null;
   await ensureRuntimeSchema();
   const row = await env.DB.prepare(
-    "SELECT dataset_key, fallback_payload, synced_at FROM dataset_snapshots WHERE id = ?1",
+    `SELECT dataset_key, fallback_payload, source_synced_at, synced_at,
+            run_id, version
+       FROM dataset_snapshots WHERE id = ?1`,
   )
     .bind(SNAPSHOT_ID)
     .first<SnapshotRow>();
@@ -800,7 +1090,10 @@ export async function getDatasetSnapshotMetadata(): Promise<SnapshotMetadata | n
     ? {
         datasetKey: row.dataset_key,
         fallbackPayload: row.fallback_payload,
+        sourceSyncedAt: row.source_synced_at ?? row.synced_at,
         syncedAt: row.synced_at,
+        runId: row.run_id,
+        version: row.version || 1,
       }
     : null;
 }
@@ -835,6 +1128,9 @@ export async function loadDatasetSnapshot(
 ): Promise<{
   data: DemoDataset;
   syncedAt: string;
+  stateUpdatedAt: string;
+  datasetKey: string;
+  version: number;
 } | null> {
   const env = await runtimeBindings();
   const metadata =
@@ -848,7 +1144,10 @@ export async function loadDatasetSnapshot(
       const data = await object.json<DemoDataset>();
       return {
         data: normalizeDataset(data),
-        syncedAt: metadata?.syncedAt ?? new Date().toISOString(),
+        syncedAt: metadata?.sourceSyncedAt ?? new Date().toISOString(),
+        stateUpdatedAt: metadata?.syncedAt ?? new Date().toISOString(),
+        datasetKey: key,
+        version: metadata?.version ?? 0,
       };
     }
   }
@@ -856,7 +1155,10 @@ export async function loadDatasetSnapshot(
     const data = JSON.parse(metadata.fallbackPayload) as DemoDataset;
     return {
       data: normalizeDataset(data),
-      syncedAt: metadata.syncedAt,
+      syncedAt: metadata.sourceSyncedAt,
+      stateUpdatedAt: metadata.syncedAt,
+      datasetKey: key,
+      version: metadata.version,
     };
   }
   return null;

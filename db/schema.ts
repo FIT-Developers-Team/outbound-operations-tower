@@ -60,9 +60,37 @@ export const datasetSnapshots = sqliteTable("dataset_snapshots", {
   fallbackPayload: text("fallback_payload"),
   soRows: integer("so_rows").notNull().default(0),
   staffRows: integer("staff_rows").notNull().default(0),
+  sourceSyncedAt: text("source_synced_at"),
   syncedAt: text("synced_at").notNull(),
   runId: text("run_id").notNull(),
+  version: integer("version").notNull().default(1),
 });
+
+/** Durable idempotency receipts for operational write commands. */
+export const commandReceipts = sqliteTable("command_receipts", {
+  idempotencyKey: text("idempotency_key").primaryKey(),
+  action: text("action").notNull(),
+  actor: text("actor").notNull(),
+  status: text("status").notNull(),
+  message: text("message"),
+  createdAt: text("created_at").notNull(),
+  finishedAt: text("finished_at"),
+});
+
+/** Shared login throttling state for every Worker isolate. */
+export const signInAttempts = sqliteTable(
+  "sign_in_attempts",
+  {
+    key: text("key").primaryKey(),
+    failures: integer("failures").notNull().default(0),
+    windowStart: text("window_start").notNull(),
+    blockedUntil: text("blocked_until"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("sign_in_attempts_updated_at_idx").on(table.updatedAt),
+  ],
+);
 
 /**
  * Routing is configuration, not snapshot data. Keeping it in its own table

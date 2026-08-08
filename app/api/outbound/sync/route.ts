@@ -14,7 +14,7 @@ import {
   isSameOrigin,
   getOutboundAccess,
 } from "@/lib/request-auth";
-import { jakartaMonth, syncFromSuperset } from "@/lib/superset-sync";
+import { monthInTimeZone, syncFromSuperset } from "@/lib/superset-sync";
 
 function error(status: number, errorCode: string, message: string) {
   return NextResponse.json({ ok: false, errorCode, message }, { status });
@@ -26,7 +26,7 @@ async function freshSnapshot() {
     getDatasetSnapshotMetadata(),
   ]);
   if (!snapshot) return null;
-  const ageMs = Date.now() - Date.parse(snapshot.syncedAt);
+  const ageMs = Date.now() - Date.parse(snapshot.sourceSyncedAt);
   const maxAgeMs = connector.refreshIntervalMinutes * 60_000;
   return ageMs >= 0 && ageMs < maxAgeMs ? snapshot : null;
 }
@@ -68,13 +68,15 @@ export async function POST(request: NextRequest) {
         ok: true,
         skipped: true,
         message: "Snapshot masih dalam interval refresh.",
-        syncedAt: snapshot.syncedAt,
+        syncedAt: snapshot.sourceSyncedAt,
       });
     }
   }
 
   const runId = crypto.randomUUID();
-  const month = jakartaMonth().key;
+  const month = monthInTimeZone(
+    (await getStoredConnector()).warehouseTimezone,
+  ).key;
   const lease = await acquireSyncLease();
   if (!lease.acquired) {
     const snapshot = await getDatasetSnapshotMetadata();
@@ -83,7 +85,7 @@ export async function POST(request: NextRequest) {
         ok: true,
         skipped: true,
         message: "Sync lain sedang berjalan.",
-        syncedAt: snapshot?.syncedAt ?? null,
+        syncedAt: snapshot?.sourceSyncedAt ?? null,
       },
       { status: 202 },
     );
@@ -96,7 +98,7 @@ export async function POST(request: NextRequest) {
           ok: true,
           skipped: true,
           message: "Snapshot sudah diperbarui oleh pengguna lain.",
-          syncedAt: snapshot.syncedAt,
+          syncedAt: snapshot.sourceSyncedAt,
         });
       }
     }

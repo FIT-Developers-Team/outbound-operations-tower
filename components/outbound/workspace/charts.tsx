@@ -227,7 +227,7 @@ export function PickerScatter({ data }: { data: DemoDataset }) {
     <>
       <div className="chart-value-strip">
         <span><small>Rata-rata beban</small><strong className="num">{avgLoad.toFixed(0)}%</strong></span>
-        <span><small>Rata-rata output</small><strong className="num">{avgProductivity.toFixed(0)} unit/jam</strong></span>
+        <span><small>Rata-rata output</small><strong className="num">{avgProductivity.toFixed(0)} unit/jam produktif</strong></span>
         <span><small>Picker diplot</small><strong className="num">{points.length}</strong></span>
       </div>
       <div
@@ -235,12 +235,12 @@ export function PickerScatter({ data }: { data: DemoDataset }) {
         role="img"
         aria-label="Sebaran beban dan produktivitas picker"
       >
-        <span className="scatter-axis axis-y">Unit/jam</span>
+        <span className="scatter-axis axis-y">Unit/jam produktif</span>
         <span className="scatter-axis axis-x">Beban target</span>
         <i className="scatter-target" />
         {points.map(({ picker, load, productivity }) => (
           <button
-            aria-label={`${picker.name}: beban ${Math.round(load)} persen, produktivitas ${Math.round(productivity)} unit per jam`}
+            aria-label={`${picker.name}: beban ${Math.round(load)} persen, produktivitas ${Math.round(productivity)} unit per jam produktif`}
             className={`scatter-point ${isEligiblePicker(picker) ? "is-eligible" : "is-hold"}`}
             key={picker.id}
             onClick={() => setSelected(picker)}
@@ -250,7 +250,7 @@ export function PickerScatter({ data }: { data: DemoDataset }) {
               width: `${8 + Math.min(10, picker.totalSo)}px`,
               height: `${8 + Math.min(10, picker.totalSo)}px`,
             }}
-            title={`${picker.name} · ${Math.round(load)}% beban · ${Math.round(productivity)} unit/jam`}
+            title={`${picker.name} · ${Math.round(load)}% beban · ${Math.round(productivity)} unit/jam produktif`}
             type="button"
           />
         ))}
@@ -264,11 +264,11 @@ export function PickerScatter({ data }: { data: DemoDataset }) {
           <div className="definition-grid">
             <Definition label="Staff ID" value={selected.id} />
             <Definition label="Jadwal" value={selected.scheduleDescription} />
-            <Definition label="Durasi aktif" value={`${selected.activeHours.toFixed(1)} jam`} />
+            <Definition label="Jam produktif" value={`${selected.activeHours.toFixed(0)} jam`} />
             <Definition label="Output" value={`${number.format(selected.pickedQty)} unit`} />
             <Definition
               label="Produktivitas"
-              value={`${Math.round(selected.pickedQty / Math.max(1, selected.activeHours))} unit/jam`}
+              value={`${Math.round(selected.pickedQty / Math.max(1, selected.activeHours))} unit/jam produktif`}
             />
             <Definition
               label="Beban target"
@@ -313,4 +313,3 @@ export function QuantityHistogram({ data }: { data: DemoDataset }) {
     </div>
   );
 }
-

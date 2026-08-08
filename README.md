@@ -19,7 +19,7 @@ Implementasi ini menggantikan Google Sheets dan Apps Script dengan konektor Supe
 - Dashboard Picker menampilkan Top 10, durasi, unit per jam, per hari, per SKU, per SO, picker on duty, serta tren rata-rata qty harian/jam.
 - Supply Order memiliki filter lengkap, pencarian SKU/produk/remark, sorting, dan detail SKU.
 - Semua tabel operasional dapat diurutkan; angka utama chart ditampilkan langsung agar terbaca saat screenshot.
-- Panduan memuat alur interaktif, kalkulator estimasi kuota, troubleshooting, dan roadmap multi-warehouse.
+- Panduan berisi langkah memakai Assign Picker: memilih SO, rekomendasi, assign manual, memeriksa staging, dan menerapkan.
 
 ## Arsitektur
 
@@ -76,7 +76,7 @@ Angka aktual biasanya lebih rendah karena:
 4. sync otomatis dilewati selama snapshot masih segar;
 5. query operasional memakai primary key atau indeks.
 
-Kalkulator interaktif yang sama tersedia di **Panduan → Kalkulator kuota**. Pantau tiga kuota secara terpisah: Worker requests, D1 rows read/write, dan R2 Class A/B operations.
+Pantau tiga kuota secara terpisah: Worker requests, D1 rows read/write, dan R2 Class A/B operations.
 
 Dokumentasi resmi:
 
@@ -94,7 +94,7 @@ Tanpa akses database, SQL Lab, API token, atau service account Superset, integra
 2. Server membaca interval connector dan waktu snapshot terakhir.
 3. Mode `auto` berhenti cepat bila snapshot masih segar.
 4. D1 lease memastikan hanya satu sync lintas pengguna yang berjalan.
-5. Dua saved chart Superset diambil paralel.
+5. Dua saved chart Superset diambil berurutan untuk menjaga batas memori Worker.
 6. Query context yang tersimpan pada chart tetap menjadi baseline.
 7. Respons divalidasi, filter diterapkan/ditolak dicatat, dan data dibatasi ke bulan berjalan.
 8. Raw export serta snapshot baru ditulis ke R2.
@@ -105,13 +105,13 @@ Tombol **Refresh data** memulai mode manual. Refresh otomatis memakai interval 1
 
 ### Filter Superset dan filter web
 
-Default endpoint:
+Template endpoint saved chart:
 
 ```text
 /api/v1/chart/{sliceId}/data/?format=json&type=full&force=true
 ```
 
-Endpoint tersebut memakai query context yang disimpan bersama chart. Karena itu filter waktu, datasource, adhoc filter, metric, dan konfigurasi chart yang tersimpan tetap menjadi baseline. Aplikasi membaca metadata `applied_filters` dan `rejected_filters` bila tersedia.
+Runtime memakai format CSV secara default untuk menekan penggunaan memori dan mengganti `format=json` pada template bawaan secara otomatis. Set `SUPERSET_EXPORT_FORMAT=json` hanya bila metadata `applied_filters`/`rejected_filters` diperlukan dan ukuran export sudah terbukti aman. Kedua format tetap memakai query context yang disimpan bersama chart, sehingga filter waktu, datasource, adhoc filter, metric, dan konfigurasi chart menjadi baseline.
 
 Filter di halaman web—misalnya Wave, Drop, shift, remark, MP status, zone, tanggal, atau picker—menyaring snapshot yang sudah lolos baseline Superset. Aplikasi tidak membangun ulang query context dengan `POST /api/v1/chart/data`; ini sengaja dipilih agar integrasi tetap maintainable tanpa akses API resmi.
 
@@ -204,7 +204,7 @@ Picker eligible harus aktif, memiliki Staff ID/nama, sesuai role, tidak Off Day,
 | Checker | route checker, progres, dan sorting |
 | Laporan | audit, kualitas data, dan ekspor |
 | Konfigurasi | warehouse profile, Superset, cookie, interval, Wave/Drop, target |
-| Panduan | alur interaktif, kalkulator kuota, troubleshooting, dan ekspansi warehouse |
+| Panduan | langkah assign picker, arti angka staging, dan syarat yang diperiksa |
 
 ## Struktur proyek
 
@@ -288,6 +288,7 @@ Variable penting:
 | `OUTBOUND_ALLOW_ANONYMOUS_READ` | lokal/preview | izinkan snapshot dibaca tanpa login |
 | `OUTBOUND_ADMIN_EMAILS` | production | allowlist operator admin |
 | `OUTBOUND_ADMIN_TOKEN` | self-host | token masuk admin di `/masuk`, minimal 32 karakter |
+| `OUTBOUND_ADMIN_SESSION_DAYS` | self-host | batas absolut sesi admin, default 30 dan maksimum 365 hari |
 | `OUTBOUND_TRUST_PLATFORM_AUTH` | self-host | `false` bila tidak ada auth proxy platform di depan aplikasi |
 | `OUTBOUND_WAREHOUSE_CODE` | bootstrap | kode warehouse, contoh `CBT` |
 | `OUTBOUND_WAREHOUSE_NAME` | bootstrap | nama warehouse |
@@ -296,7 +297,9 @@ Variable penting:
 | `SUPERSET_BASE_URL` | bootstrap | base URL HTTPS Superset |
 | `SUPERSET_SO_SLICE_ID` | bootstrap | numeric Slice ID SO |
 | `SUPERSET_STAFF_SLICE_ID` | bootstrap | numeric Slice ID staff |
-| `SUPERSET_EXPORT_PATH_TEMPLATE` | opsional | default endpoint JSON saved chart |
+| `SUPERSET_EXPORT_PATH_TEMPLATE` | opsional | template endpoint saved chart |
+| `SUPERSET_EXPORT_FORMAT` | opsional | `csv` (default, hemat memori) atau `json` |
+| `SUPERSET_EXPORT_MAX_MB` | opsional | batas tiap export, default 45 MB dan maksimum 120 MB |
 | `SUPERSET_REFRESH_INTERVAL_MINUTES` | opsional | 1–60 menit |
 | `SUPERSET_COOKIE_ENCRYPTION_KEY` | opsional | secret minimal 32 karakter; tanpa ini kunci dibuat otomatis dan disimpan di D1 |
 | `SUPERSET_SESSION_COOKIE` | opsional | bootstrap cookie melalui secret env |
@@ -620,7 +623,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 2. Set `OUTBOUND_ADMIN_TOKEN` pada environment Coolify, dan pastikan email operator ada di `OUTBOUND_ADMIN_EMAILS`. **Jangan centang Build Variable.** Coolify menulis build variable ke Dockerfile sebagai `ARG NAMA=nilai`, dan nilai itu ikut tersimpan pada metadata image sehingga terbaca lewat `docker history`. Token hanya dibutuhkan saat runtime.
 3. Buka `/masuk`, isi email dan token, lalu kembali ke Konfigurasi.
 
-Server mengeluarkan cookie sesi bertanda tangan HMAC-SHA256 dengan atribut `HttpOnly`, `SameSite=Strict`, dan `Secure` bila diakses melalui HTTPS. Sesi berlaku 12 jam. Allowlist `OUTBOUND_ADMIN_EMAILS` diperiksa ulang pada setiap request, jadi menghapus satu email langsung mencabut aksesnya tanpa menunggu cookie kedaluwarsa. Token hanya diverifikasi lewat perbandingan digest, dan email salah maupun token salah dijawab identik agar daftar admin tidak bisa ditebak.
+Server mengeluarkan cookie sesi bertanda tangan HMAC-SHA256 dengan atribut `HttpOnly`, `SameSite=Strict`, dan `Secure` bila diakses melalui HTTPS. Sesi memiliki batas absolut 30 hari secara default (dapat diatur 1–365 hari lewat `OUTBOUND_ADMIN_SESSION_DAYS`). Allowlist `OUTBOUND_ADMIN_EMAILS` diperiksa ulang pada setiap request, jadi menghapus satu email langsung mencabut aksesnya tanpa menunggu cookie kedaluwarsa. Token hanya diverifikasi lewat perbandingan digest, dan email salah maupun token salah dijawab identik agar daftar admin tidak bisa ditebak.
 
 Jalankan aplikasi di belakang HTTPS. Tanpa TLS, atribut `Secure` tidak dipasang dan cookie sesi melintas sebagai teks biasa.
 
@@ -644,7 +647,7 @@ Migration `drizzle/*.sql` diterapkan otomatis pada setiap start dan bersifat ide
 - tidak ada WebGL, 3D runtime, atau dependency charting besar;
 - chart memakai HTML/CSS ringan dan agregasi terkontrol;
 - data table besar dipaginasi atau dibatasi;
-- dua chart Superset diambil paralel;
+- dua chart Superset diambil berurutan agar dua payload besar tidak berada di memori bersamaan;
 - freshness gate, Web Locks, dan D1 lease mencegah sync ganda;
 - snapshot memakai ETag dan conditional request;
 - schema initialization di-cache per Worker isolate;

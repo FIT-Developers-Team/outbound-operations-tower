@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import {
   useState,
 } from "react";
@@ -75,22 +76,45 @@ export function CheckerView({
               <SortableHeader column="deadline" label="Deadline" onSort={setSort} sort={sort} />
               <th>Aksi</th>
             </tr></thead>
-            <tbody>{routes.map((route) => (
-              <tr key={route.id}>
-                <th scope="row"><strong>{route.route}</strong><small className="num">{route.id} · {route.updatedAt}</small></th>
-                <td><span className="chip chip-accent">{route.wave}</span></td>
-                <td><CheckerBadge state={route.status} /></td>
-                <td>{route.worker ?? <span className="muted">Belum diklaim</span>}</td>
-                <td className="numeric num">{number.format(route.quantity)}</td>
-                <td className="numeric num">{requiredStations(route.quantity, rate)}</td>
-                <td className={route.status === "OVERDUE" ? "deadline-risk num" : "num"}>{route.deadline}</td>
-                <td>{route.status === "DONE" ? <button className="btn btn-sm btn-ghost" onClick={() => onStatus(route.id, "WAITING")} type="button">Buka ulang</button> : <button className="btn btn-sm" onClick={() => onStatus(route.id, "DONE")} type="button">Selesai</button>}</td>
-              </tr>
-            ))}</tbody>
+            <tbody>
+              {!routes.length && (
+                <tr>
+                  <td className="table-empty-cell" colSpan={8}>
+                    <div className="empty-state">
+                      {data.destinationRules.length ? (
+                        <>
+                          <strong>Belum ada route checker untuk snapshot ini.</strong>
+                          <span>Route akan terbentuk dari SO yang cocok dengan mapping tujuan aktif.</span>
+                        </>
+                      ) : (
+                        <>
+                          <strong>Mapping tujuan belum tersedia.</strong>
+                          <span>Tambahkan wave, drop, dan urutan tujuan agar route checker dapat dibentuk dari data langsung.</span>
+                          <Link className="btn btn-sm btn-primary" href="/settings">
+                            Buka konfigurasi routing
+                          </Link>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )}
+              {routes.map((route) => (
+                <tr key={route.id}>
+                  <th scope="row"><strong>{route.route}</strong><small className="num">{route.id} · {route.updatedAt}</small></th>
+                  <td><span className="chip chip-accent">{route.wave}</span></td>
+                  <td><CheckerBadge state={route.status} /></td>
+                  <td>{route.worker ?? <span className="muted">Belum diklaim</span>}</td>
+                  <td className="numeric num">{number.format(route.quantity)}</td>
+                  <td className="numeric num">{requiredStations(route.quantity, rate)}</td>
+                  <td className={route.status === "OVERDUE" ? "deadline-risk num" : "num"}>{route.deadline}</td>
+                  <td>{route.status === "DONE" ? <button className="btn btn-sm btn-ghost" onClick={() => onStatus(route.id, "WAITING")} type="button">Buka ulang</button> : <button className="btn btn-sm" onClick={() => onStatus(route.id, "DONE")} type="button">Selesai</button>}</td>
+                </tr>
+              ))}
+            </tbody>
           </table>
         </div>
       </Section>
     </>
   );
 }
-
